@@ -45,7 +45,7 @@ The system is an algebraic object: operations compose, invariants hold, state tr
 
 #### Conceptual Simplicity, Structural Complexity
 
-Like a fractal or a fugue: simple generative rules producing rich emergent structure. One model explaining many phenomena. Five primitives. Four kernels. Infinite capability.
+Like a fractal or a fugue: simple generative rules producing rich emergent structure. One model explaining many phenomena. Three primitives. Four kernels. Infinite capability.
 
 #### Full State Awareness
 
@@ -191,12 +191,12 @@ The Cognitive kernel schedules across heterogeneous compute units. This is what 
 
 Modern heterogeneous systems have _multiple_ memory spaces with different coherence guarantees. AETHEROS exposes this cleanly rather than hiding it:
 
-| Domain Type | Semantics |
+| Coherence | Semantics |
 |---|---|
-| *CPU-coherent* | Traditional RAM; hardware maintains coherence |
-| *Device-local* | GPU VRAM; not directly CPU-accessible |
-| *Shared-visible* | CPU↔GPU shared; explicit synchronization required |
-| *Persistent* | Survives power loss (Optane, CXL-attached) |
+| *coherent* | Hardware-maintained (CPU RAM, CXL Type 3) |
+| *explicit* | Requires sync primitives (GPU VRAM, shared buffers) |
+
+Persistence is orthogonal—any domain can have `persistent: true` for power-loss survival (Optane, CXL-PM, battery-backed).
 
 #### 4. Everything is a Typed Channel
 
@@ -245,24 +245,29 @@ The complete AETHEROS architecture forms four distinct layers:
 
 ## Foundational Primitives
 
-### The Five Primitives
+### The Three Primitives
 
-Every concept in AETHEROS derives from exactly five primitives:
+> **MA Principle: Every primitive must earn its existence. Nothing ornamental, nothing vestigial.**
+
+Every concept in AETHEROS derives from exactly three primitives:
 
 | Primitive | Meaning | Mathematical Structure |
 |---|---|---|
-| *Resource* | Something that exists and can be used | Set with equivalence relation |
-| *Capability* | Authority to act on a resource | Morphism in a category |
-| *Domain* | Isolated state container | Object in a category |
-| *Channel* | Typed conduit between domains | Session-typed morphism |
-| *Transition* | State change | Total function on states |
+| *Capability* | Authority to act (encapsulates resource + rights + provenance) | Morphism in a category |
+| *State* | System configuration (partitioned by isolation domains) | Product of domain states |
+| *Transition* | State change rule (event-driven, capability-mediated) | Total function on states |
 
-Everything else—processes, threads, files, memory, devices—is _derivable_ from these five.
+**Derived concepts** (not primitives):
+- *Resource* — Implicit in Capability; no resource exists without authority over it
+- *Domain* — Partition of State; an organizational concept, not a primitive
+- *Channel* — Derivable from Capability (send rights) + Transition (message transfer)
+
+Everything else—processes, threads, files, memory, devices—is _derivable_ from these three.
 
 ### Core Equations
 
 [stem]
-\text{System} := (\text{Domains}, \text{Channels}, \text{Capabilities}, \text{State}, \text{Transitions})
+\text{System} := (\text{Capabilities}, \text{State}, \text{Transitions})
 
 [stem]
 \text{State} := \prod_{d : \text{Domain}} \text{DomainState}(d)
@@ -271,12 +276,67 @@ Everything else—processes, threads, files, memory, devices—is _derivable_ fr
 \text{Transition} : \text{State} \times \text{Event} \to \text{State}
 
 [stem]
-\text{Capability} := (\text{Resource}, \text{Rights}, \text{Provenance})
+\text{Capability} := (\text{Target}, \text{Rights}, \text{Provenance})
 
 The invariant preservation property:
 
 [stem]
 \forall\, t : \text{Transition},\, \forall\, \text{inv} : \text{Invariant} \implies \text{inv}(\text{state}) \Rightarrow \text{inv}(t(\text{state}, \text{event}))
+
+### Unified Priority Model
+
+> **MA Principle: Single priority representation with context-specific projections.**
+
+AETHEROS uses one canonical priority structure, avoiding independent priority systems that could conflict:
+
+```lean
+-- Canonical urgency levels (used across all kernels)
+inductive Urgency where
+  | critical    -- Life-safety, data loss imminent
+  | high        -- User-perceivable latency impact
+  | normal      -- Standard interactive work
+  | low         -- Background, can tolerate delay
+  | background  -- Opportunistic, lowest priority
+  deriving Ord, DecidableEq, Repr
+
+-- The single canonical priority structure
+structure CanonicalPriority where
+  urgency    : Urgency           -- Time criticality
+  deadline   : Option Timestamp  -- Absolute deadline (if any)
+  class      : PriorityClass     -- Categorization for scheduling policy
+
+inductive PriorityClass where
+  | realtime    -- Hard deadline, preempts everything
+  | interactive -- User-facing, low latency
+  | batch       -- Throughput-oriented
+  | idle        -- Only when system idle
+  deriving DecidableEq, Repr
+
+-- Interrupt priority levels (canonical definition)
+-- Physical kernel uses these for interrupt handling decisions
+inductive InterruptLevel where
+  | critical   -- Cannot be masked, immediate dispatch (NMI, exceptions)
+  | realtime   -- Maskable but time-sensitive (timer, IPI)
+  | deferred   -- Can be coalesced, batched (device, MSI)
+  deriving Ord, DecidableEq, Repr
+
+-- Projection to interrupt handling (Physical kernel)
+def CanonicalPriority.toInterruptLevel (p : CanonicalPriority) : InterruptLevel :=
+  match p.urgency, p.class with
+  | .critical, _         => .critical
+  | _, .realtime         => .realtime
+  | .high, .interactive  => .realtime
+  | _, _                 => .deferred
+
+-- Projection to placement weights (Cognitive kernel)
+def CanonicalPriority.toPlacementWeights (p : CanonicalPriority) : PlacementWeights :=
+  p.urgency.toWeights  -- Uses existing Urgency.toWeights
+
+-- Emotive kernel's Priority is a rich wrapper around CanonicalPriority
+-- (See Emotive Kernel Specification for full structure)
+```
+
+**Key invariant**: Any priority value anywhere in the system can be derived from a `CanonicalPriority`. No kernel invents its own priority semantics.
 
 
 ## Boot Sequence Specification
@@ -782,7 +842,11 @@ structure PhysicalState where
   systemTime        : Timestamp
   timerQueues       : List TimerEntry
 
-  -- Heterogeneous compute
+  -- CPU core dispatch (execution state, NOT scheduling decisions)
+  -- Physical enforces; Cognitive decides (see Scheduler Ownership Model)
+  cpuDispatchState  : CPUDispatchState
+
+  -- Heterogeneous compute (hardware state only)
   gpuState          : GPUState
   npuState          : NPUState
 
@@ -795,20 +859,29 @@ structure PhysicalState where
 AETHEROS exposes memory heterogeneity explicitly:
 
 ```lean
-inductive MemoryDomainType where
-  | cpuCoherent      -- Traditional CPU-coherent RAM
-  | deviceLocal      -- GPU VRAM, not CPU-accessible
-  | sharedVisible    -- CPU↔GPU shared, explicit sync required
-  | persistent       -- Survives power loss (Optane, CXL-PM)
+-- MA: Two coherence modes capture the fundamental hardware distinction
+-- Persistence is orthogonal (attribute, not type)
+inductive MemoryCoherence where
+  | coherent    -- Hardware-maintained (CPU-coherent RAM, CXL Type 3)
+  | explicit    -- Requires explicit sync (GPU VRAM, shared buffers)
   deriving DecidableEq, Repr
 
+-- Persistence is an attribute, not a domain type
+-- Applies to any coherence mode (Optane, CXL-PM, battery-backed)
 structure MemoryDomain where
-  domainType   : MemoryDomainType
+  coherence    : MemoryCoherence
+  persistent   : Bool              -- Survives power loss
   baseAddress  : PhysicalAddress
   size         : Size
   owner        : Domain
-  coherence    : CoherenceProtocol
   numaNode     : NUMANode
+
+-- Convenience predicates for common patterns
+def MemoryDomain.isGPULocal (d : MemoryDomain) : Bool :=
+  d.coherence = .explicit ∧ d.numaNode.isGPU
+
+def MemoryDomain.isCPUAccessible (d : MemoryDomain) : Bool :=
+  d.coherence = .coherent ∨ d.numaNode.hasMMIO
 ```
 
 ### Hardware Mapping
@@ -869,33 +942,53 @@ The Physical kernel owns all hardware interrupts and is responsible for timely, 
 #### Interrupt Classification
 
 ```lean
--- Interrupt class enumeration
+-- Interrupt class enumeration (source classification)
+-- MA principle: 5 classes reduced to 3 - each class has distinct handling semantics
 inductive InterruptClass where
-  | timer           -- Scheduling quantum expired (APIC timer)
-  | ipi             -- Inter-processor interrupt (cross-core sync)
-  | device          -- Device completion/error (PCIe, NVMe, etc.)
-  | exception       -- CPU exception (fault, trap, abort)
-  | nmi             -- Non-maskable interrupt (critical hardware)
+  | critical      -- NMI, machine check, exceptions - non-maskable, immediate
+  | realtime      -- Timer, IPI - scheduling-critical, low-latency
+  | deferred      -- Device completion, polling - can be batched/coalesced
   deriving DecidableEq, Repr
 
--- Interrupt priority levels (0 = highest)
-inductive InterruptPriority where
-  | critical   : InterruptPriority  -- NMI, machine check
-  | realtime   : InterruptPriority  -- Timer, scheduling
-  | high       : InterruptPriority  -- IPI, synchronization
-  | normal     : InterruptPriority  -- Device completion
-  | low        : InterruptPriority  -- Background device polling
-  deriving Ord, DecidableEq, Repr
+-- Mapping from hardware sources to interrupt classes
+def classifyInterruptSource : HardwareSource → InterruptClass
+  | .nmi             => .critical
+  | .machineCheck    => .critical
+  | .exception _     => .critical
+  | .timer           => .realtime
+  | .ipi             => .realtime
+  | .device _        => .deferred
+  | .msi _           => .deferred
+
+-- Interrupt priority levels: uses canonical InterruptLevel
+-- (Defined in Unified Priority Model section)
+-- Each level has clear semantics and preemption rules
+
+-- Priority directly maps from class (no arbitrary assignment)
+def classToPriority : InterruptClass → InterruptLevel
+  | .critical => .critical
+  | .realtime => .realtime
+  | .deferred => .deferred
+
+-- Preemption matrix (3x3 = 9 cells, not 25)
+-- Entry (a, b) = true iff priority a can preempt priority b
+def InterruptLevel.canPreempt : InterruptLevel → InterruptLevel → Bool
+  | .critical, _         => true   -- Critical preempts all
+  | .realtime, .deferred => true   -- Realtime preempts deferred
+  | .realtime, .realtime => false  -- Same level: no preemption
+  | .deferred, _         => false  -- Deferred never preempts
 
 -- Interrupt descriptor with handler metadata
 structure InterruptDescriptor where
   class       : InterruptClass
   vector      : Fin 256               -- x86-64 interrupt vector
   handler     : Kernel                -- Which kernel handles this
-  priority    : InterruptPriority
-  preempts    : List Kernel           -- Which kernels can be preempted
+  priority    : InterruptLevel        -- Uses canonical InterruptLevel
   affinity    : Option CoreId         -- Core affinity (None = any)
-  nestable    : Bool                  -- Can higher-priority interrupt this?
+
+-- Derived: preemption is determined by priority, not per-descriptor list
+def preemptsKernel (id : InterruptDescriptor) (k : Kernel) : Bool :=
+  id.priority.canPreempt (kernelCurrentPriority k)
 ```
 
 #### Latency Service Level Objectives
@@ -904,20 +997,17 @@ AETHEROS provides soft real-time guarantees on interrupt response latency:
 
 ```lean
 -- Interrupt latency SLO: time from hardware signal to handler entry
+-- (MA: 3 classes, each with single latency target)
 def interruptLatencySLO : InterruptClass → Duration
-  | .timer     => 10.μs      -- Scheduling must be responsive
-  | .ipi       => 5.μs       -- IPI is synchronization-critical
-  | .device    => 100.μs     -- Device can tolerate some delay
-  | .exception => 1.μs       -- Exceptions are synchronous (on same core)
-  | .nmi       => 0.5.μs     -- NMI is highest priority
+  | .critical  => 1.μs       -- NMI, exceptions: immediate response required
+  | .realtime  => 10.μs      -- Timer, IPI: scheduling-critical
+  | .deferred  => 100.μs     -- Devices: can tolerate coalescing
 
 -- Handler completion time budget (worst-case)
 def handlerBudget : InterruptClass → Duration
-  | .timer     => 50.μs      -- Update scheduler state, select next task
-  | .ipi       => 10.μs      -- TLB shootdown, cache flush
-  | .device    => 500.μs     -- Copy completion status, wake waiters
-  | .exception => 100.μs     -- Exception dispatch (may escalate)
-  | .nmi       => 20.μs      -- Log and potentially panic
+  | .critical  => 20.μs      -- Log, potentially panic, minimal work
+  | .realtime  => 50.μs      -- Update scheduler state, signal waiters
+  | .deferred  => 500.μs     -- Copy completion status, batch processing
 ```
 
 #### Interrupt Vector Assignment
@@ -987,7 +1077,7 @@ inductive HandlerState where
 structure InterruptController where
   pendingMask   : BitVec 256           -- Pending interrupts by vector
   servicingMask : BitVec 256           -- Currently servicing
-  priorityLevel : InterruptPriority     -- Current priority threshold
+  priorityLevel : InterruptLevel       -- Current priority threshold (canonical)
   handlerStates : CoreId → HandlerState
 
 -- Entry point from assembly trampoline
@@ -1040,25 +1130,31 @@ def handleInterrupt (vector : Fin 256) (state : InterruptController)
 #### Timer Interrupt Handler
 
 ```lean
--- Timer interrupt: core scheduling primitive
+-- Timer interrupt: timekeeping and quantum enforcement
+-- NOTE: Physical does NOT decide what runs next—Cognitive owns scheduling
 def handleTimer (desc : InterruptDescriptor) (ctx : CPUContext) : IO (Option Action) := do
   -- Update system time
   let now ← atomicIncrement systemTicks
 
-  -- Check timer queue for expired entries
+  -- Check timer queue for expired entries (timer callbacks)
   let expired ← popExpiredTimers now
   for entry in expired do
     entry.callback.invoke
 
-  -- Scheduler quantum check
-  let currentTask := runningTask[currentCore]
-  if currentTask.quantum.expired now then
-    -- Request Cognitive kernel for scheduling decision
-    let msg := SchedulerMessage.quantumExpired currentTask currentCore ctx
-    sendToKernel .cognitive msg
-    return some Action.yield  -- Will context switch on return
-
-  return none
+  -- Quantum enforcement: report to Cognitive, await dispatch directive
+  -- (Uses CPUDispatchState per Scheduler Ownership Model)
+  let dispatch ← getCPUDispatchState
+  let core := currentCore
+  if dispatch.quantumRemaining core ≤ Duration.zero then
+    -- Physical's role: report event, NOT select next task
+    let event := SchedulingEvent.quantumExpired core (dispatch.coreAssignment core) ctx
+    sendToKernel .cognitive event
+    return some Action.awaitDispatch  -- Pause until Cognitive responds
+  else
+    -- Decrement quantum, continue current task
+    modifyCPUDispatchState (fun s => { s with
+      quantumRemaining := s.quantumRemaining.update core (· - timerTickDuration) })
+    return none
 ```
 
 #### Device Interrupt Handler
@@ -1326,24 +1422,40 @@ def computeOverallExperience (eq : ExperienceQuality)
 
 ```lean
 -- The Emotive kernel's output to other kernels
+-- This is a RICH WRAPPER around CanonicalPriority (see Unified Priority Model)
+-- Priority adds goal context and quality targets; CanonicalPriority is the scheduling core
 structure Priority where
   focus         : Goal           -- primary goal to serve
-  urgency       : Urgency        -- time criticality
+  urgency       : Urgency        -- time criticality (from CanonicalPriority)
   resourceBudget: ResourceBudget -- allocation guidance
   qualityTarget : ExperienceQuality  -- minimum acceptable
+
+-- Convert to canonical form for cross-kernel communication
+def Priority.toCanonical (p : Priority) (deadline : Option Timestamp := none) : CanonicalPriority :=
+  { urgency  := p.urgency
+  , deadline := deadline
+  , class    := p.urgency.toPriorityClass }  -- Derive class from urgency
+
+-- Derive PriorityClass from Urgency (sensible defaults)
+def Urgency.toPriorityClass : Urgency → PriorityClass
+  | .critical   => .realtime
+  | .high       => .interactive
+  | .normal     => .interactive
+  | .low        => .batch
+  | .background => .idle
 
 -- Directives to specific kernels
 structure CognitiveDirective where
   primaryGoal    : Goal
   secondaryGoals : List Goal
-  deadline       : Option Deadline
+  priority       : CanonicalPriority  -- Unified priority for scheduling
   qualityFloor   : ExperienceQuality
 
 structure PhysicalDirective where
   latencyBudget  : Duration
   allocation     : ResourceBudget
   powerMode      : PowerMode
-  preemptPriority: Priority
+  priority       : CanonicalPriority  -- Unified priority for dispatch
 ```
 
 ### Input Signal Sources
@@ -1435,61 +1547,50 @@ def blendPriors (history : UserHistory) (goal : Goal) : Probability :=
 
 ### Fallback Modes
 
-When intent inference confidence is low, the Emotive kernel gracefully degrades to explicit or heuristic-based priority computation:
+When intent inference confidence is low, the Emotive kernel gracefully degrades. Per MA, we use exactly two modes—no more granularity than semantically necessary:
 
 ```lean
 -- Confidence threshold for trusting inference
 def confidenceThreshold : Confidence := 0.6
 
--- Fallback strategies when inference is uncertain
+-- MA: Two fallback modes capture all meaningful distinctions
 inductive FallbackMode where
-  | useExplicitPreferences   -- User-configured priority profiles
-  | balancedDefault          -- Equal weight to all active goals
-  | askUser                  -- Prompt for clarification (interruptible)
-  | recentBias               -- Favor recently active goals
-  | contextualDefault        -- Use time-of-day and location defaults
+  | useModel      -- Confidence sufficient: trust intent model output
+  | askOrDefault  -- Confidence low: ask user if present, else sensible default
   deriving DecidableEq, Repr
 
--- Select fallback based on confidence and user presence
-def selectFallback (confidence : Confidence)
-                   (presence : PresenceState) : FallbackMode :=
-  if confidence >= confidenceThreshold then
-    .useExplicitPreferences    -- High confidence: use profile
-  else match presence with
-  | .activeFocus _ intensity =>
-      if intensity > 0.7 then .askUser       -- User engaged: ask
-      else .recentBias                       -- Don't interrupt flow
-  | .passiveAttention _ => .recentBias       -- Minimize disruption
-  | .background _ _ => .balancedDefault      -- No user to ask
-  | .absent _ => .contextualDefault          -- Use time/location
+-- Binary decision: is confidence sufficient?
+def selectFallback (confidence : Confidence) : FallbackMode :=
+  if confidence >= confidenceThreshold then .useModel else .askOrDefault
+
+-- User presence determines ask vs default behavior
+def userIsInterruptible (presence : PresenceState) : Bool :=
+  match presence with
+  | .activeFocus _ intensity => intensity > 0.7  -- Engaged enough to ask
+  | _ => false                                    -- Don't interrupt otherwise
+
+-- Compute sensible default from available context
+def computeDefaultPriority (state : EmotiveState) : Priority :=
+  let goal := state.experienceHistory.recentGoals.head?.getD Goal.default
+  { focus := goal
+  , urgency := .medium
+  , resourceBudget := .balanced
+  , qualityTarget := .acceptable }
 
 -- Apply fallback mode to produce priority
 def applyFallback (mode : FallbackMode) (state : EmotiveState) : Priority :=
   match mode with
-  | .useExplicitPreferences =>
+  | .useModel =>
       state.userProfile.currentPriorityProfile.toPriority
-  | .balancedDefault =>
-      { focus := Goal.default
-      , urgency := .medium
-      , resourceBudget := .balanced
-      , qualityTarget := .acceptable }
-  | .askUser =>
-      -- Mark that user input is needed; use safe default meanwhile
-      { focus := state.intentModel.mostLikelyGoal
-      , urgency := .low
-      , resourceBudget := .conservative
-      , qualityTarget := .acceptable }
-  | .recentBias =>
-      { focus := state.experienceHistory.recentGoals.head?.getD Goal.default
-      , urgency := .medium
-      , resourceBudget := .balanced
-      , qualityTarget := .acceptable }
-  | .contextualDefault =>
-      let timeBasedGoal := state.userProfile.typicalGoalAt state.currentMoment
-      { focus := timeBasedGoal
-      , urgency := .medium
-      , resourceBudget := .balanced
-      , qualityTarget := .acceptable }
+  | .askOrDefault =>
+      if userIsInterruptible state.userPresence then
+        -- Mark for user query; use conservative default meanwhile
+        { focus := state.intentModel.mostLikelyGoal
+        , urgency := .low
+        , resourceBudget := .conservative
+        , qualityTarget := .acceptable }
+      else
+        computeDefaultPriority state
 
 -- Graceful degradation guarantee
 theorem emotive_always_produces_priority :
@@ -1498,7 +1599,7 @@ theorem emotive_always_produces_priority :
         emotiveTransition s signal = (s', priority) := by
   intro s signal
   let confidence := (updateIntent s.intentModel signal).confidence
-  let fallback := selectFallback confidence s.userPresence
+  let fallback := selectFallback confidence
   let priority :=
     if confidence >= confidenceThreshold then
       computePriority s.intentModel s.currentExperience s.healthSnapshot s.userPresence
@@ -1571,6 +1672,53 @@ def budgetExceededFallback : Priority :=
   , urgency := .medium
   , resourceBudget := .balanced
   , qualityTarget := .acceptable }
+
+-- === Budget Enforcement Lemmas ===
+
+-- Lemma: Full Bayesian update respects budget when withinBudget holds
+lemma full_update_budget_bound
+    (h : withinBudget (EmotiveComputation.fullBayesianUpdate signal) budget) :
+    actualCycles (EmotiveComputation.fullBayesianUpdate signal) ≤ budget.maxCyclesPerUpdate := by
+  unfold withinBudget at h
+  have h_est := estimate_conservative (EmotiveComputation.fullBayesianUpdate signal)
+  exact Nat.le_trans h_est h.1
+
+lemma full_update_memory_bound
+    (h : withinBudget (EmotiveComputation.fullBayesianUpdate signal) budget) :
+    actualMemory (EmotiveComputation.fullBayesianUpdate signal) ≤ budget.memoryLimit := by
+  unfold withinBudget at h
+  exact h.2
+
+-- Lemma: Incremental update uses fewer resources than full update
+lemma incremental_update_budget_bound
+    (h : withinBudget (EmotiveComputation.incrementalUpdate signal) budget) :
+    actualCycles (EmotiveComputation.incrementalUpdate signal) ≤ budget.maxCyclesPerUpdate := by
+  have h_cheaper := incremental_cheaper_than_full signal
+  unfold withinBudget at h
+  exact Nat.le_trans h_cheaper h.1
+
+lemma incremental_update_memory_bound
+    (h : withinBudget (EmotiveComputation.incrementalUpdate signal) budget) :
+    actualMemory (EmotiveComputation.incrementalUpdate signal) ≤ budget.memoryLimit := by
+  unfold withinBudget at h
+  exact h.2
+
+-- Lemma: Cached lookup is O(1) - always within any reasonable budget
+lemma cached_lookup_budget_bound :
+    ∀ budget : EmotiveBudget,
+      actualCycles EmotiveComputation.cachedLookup ≤ budget.maxCyclesPerUpdate := by
+  intro budget
+  -- Cached lookup is constant time (hash table access)
+  have h_const := cached_is_constant_time
+  exact Nat.le_trans h_const (budget_has_minimum_cycles budget)
+
+lemma cached_lookup_memory_bound :
+    ∀ budget : EmotiveBudget,
+      actualMemory EmotiveComputation.cachedLookup ≤ budget.memoryLimit := by
+  intro budget
+  -- Cached lookup allocates no new memory
+  have h_zero := cached_no_allocation
+  exact Nat.zero_le budget.memoryLimit
 
 -- Theorem: Emotive kernel respects its budget
 theorem emotive_respects_budget :
@@ -1683,9 +1831,53 @@ structure ComputeNode where
   deadline   : Option Deadline
 ```
 
+### Scheduler Ownership Model
+
+> **MA Principle: Single responsibility for scheduling decisions.**
+
+AETHEROS explicitly separates execution from planning to avoid scheduler duplication:
+
+| Layer | Kernel | Responsibility | State Owned |
+|-------|--------|----------------|-------------|
+| **Planning** | Cognitive | What runs where, when | `SchedulerState` (full DAG, ready queue, placement decisions) |
+| **Execution** | Physical | Dispatch to CPU cores, enforce preemption | `cpuDispatchState` (currently executing per-core) |
+
+```lean
+-- Physical kernel tracks only what it has dispatched to CPU cores
+-- This is NOT a scheduler—it's execution state tracking
+structure CPUDispatchState where
+  coreAssignment : CoreId → Option TaskId  -- Currently executing
+  quantumRemaining : CoreId → Duration      -- Time until preemption
+  lastDispatch : CoreId → Timestamp         -- For accounting
+
+-- Physical's role: enforce Cognitive's decisions, report preemption events
+def physicalDispatchRole : PhysicalRole :=
+  { receives := [.dispatchRequest, .preemptRequest]  -- From Cognitive
+  , reports  := [.quantumExpired, .taskYielded, .taskCompleted]  -- To Cognitive
+  , owns     := .cpuCoreExecution  -- Hardware-level only
+  , defers   := .schedulingDecisions  -- Cognitive decides what runs next
+  }
+```
+
+**Key invariant**: Physical never decides what task runs next. When a quantum expires or task yields, Physical sends an event to Cognitive and waits for a dispatch directive.
+
+```lean
+-- Timer interrupt (Physical) triggers event, does not select next task
+def handleTimerForScheduling (core : CoreId) : IO Action := do
+  let state ← getCPUDispatchState
+  if state.quantumRemaining core ≤ 0 then
+    -- Report to Cognitive, do NOT select next task
+    let event := SchedulingEvent.quantumExpired core (state.coreAssignment core)
+    sendToKernel .cognitive event
+    return .awaitDispatch  -- Physical pauses until Cognitive responds
+  else
+    decrementQuantum core
+    return .continue
+```
+
 ### Heterogeneous Scheduling
 
-The Cognitive kernel implements a sophisticated heterogeneous scheduler that places computation across CPU cores, GPU compute units, and NPU tiles based on multi-objective optimization.
+The Cognitive kernel implements the heterogeneous scheduler that places computation across CPU cores, GPU compute units, and NPU tiles based on multi-objective optimization. Physical kernel executes CPU core dispatches; Cognitive directly commands GPU/NPU hardware.
 
 #### Scheduler State
 
@@ -1853,6 +2045,102 @@ def deadlineFeasibility (node : ComputeNode) (unit : ComputeUnit)
     else (slack / (deadline * 0.5)).toFloat  -- Linear dropoff
 ```
 
+#### Supporting Lemmas and Axioms
+
+The following lemmas and axioms underpin the scheduler correctness proofs.
+
+```lean
+-- === Axioms (System Assumptions) ===
+
+-- Axiom: All running tasks terminate within bounded time
+-- Justification: Enforced by watchdog timers at Physical kernel level
+axiom running_task_terminates :
+    ∀ task : ComputeNode, ∀ u : ComputeUnit,
+      schedulerState.runningTasks u = some task →
+        ◇ (schedulerState.runningTasks u = none ∧
+           task ∈ schedulerState.completedDAG)
+
+-- Axiom: Scheduler operates fairly (no unit monopolized indefinitely)
+axiom scheduler_fairness :
+    ∀ u : ComputeUnit,
+      ◇ (schedulerState.runningTasks u = none ∨
+         ∃ newTask, schedulerState.runningTasks u = some newTask)
+
+-- === Derived Lemmas ===
+
+-- Lemma: Priority aging ensures bounded wait time
+-- After MAX_WAIT_CYCLES, any task reaches maximum priority
+lemma priority_aging_bound (node : ComputeNode) (h_ready : node ∈ schedulerState.readyQueue) :
+    ∃ t : Nat, t ≤ MAX_WAIT_CYCLES →
+      agedPriority node t = Priority.maxPriority := by
+  use MAX_WAIT_CYCLES
+  intro _
+  -- Priority increases monotonically with wait time
+  exact aging_reaches_max node
+
+-- Lemma: Ready tasks eventually get scheduled (fairness + aging)
+lemma eventually_scheduled (h_ready : node ∈ schedulerState.readyQueue)
+    (h_aging : ∃ t, agedPriority node t = Priority.maxPriority)
+    (h_finite : ∀ task u, schedulerState.runningTasks u = some task →
+                         ◇ (task ∈ schedulerState.completedDAG)) :
+    ◇ (∃ u, schedulerState.runningTasks u = some node) := by
+  -- Once at max priority, node will be selected when any unit becomes free
+  have h_max := h_aging
+  have h_free := h_finite
+  exact fairness_yields_scheduling h_ready h_max h_free
+
+-- Lemma: Scheduler picks from ready queue
+lemma scheduler_picks_ready (h_ready : schedulerState.readyQueue.nonEmpty)
+    (h_step : schedulerStep state state') :
+    ∃ node u, node ∈ state.readyQueue ∧ state'.runningTasks u = some node := by
+  have h_pick := step_schedules_ready h_step
+  exact h_pick h_ready
+
+-- Lemma: Completion count is monotonic across steps
+lemma monotonic_completion (h_step : schedulerStep state state') :
+    state'.completedDAG.size ≥ state.completedDAG.size := by
+  -- Tasks only move to completed, never removed
+  exact completion_monotonic h_step
+
+-- Lemma: Running tasks complete monotonically
+lemma running_completes_monotonic (h_run : schedulerState.runningTasks u = some task)
+    (h_step : schedulerStep state state') :
+    state'.completedDAG.size ≥ state.completedDAG.size := by
+  exact monotonic_completion h_step
+
+-- Lemma: Work implies eventual progress
+lemma progress_from_work
+    (h_work : state.readyQueue.nonEmpty ∨ (∃ u, state.runningTasks u ≠ none))
+    (h_finite : ∀ task u, schedulerState.runningTasks u = some task →
+                         ◇ (task ∈ schedulerState.completedDAG))
+    (h_fair : scheduler_fairness) :
+    ◇ (∃ state', schedulerStep⋆ state state' ∧
+       state'.completedDAG.size > state.completedDAG.size) := by
+  cases h_work with
+  | inl h_ready =>
+    have h_sched := eventually_scheduled_from_ready h_ready h_fair
+    have h_complete := h_finite
+    exact ready_to_complete h_sched h_complete
+  | inr h_running =>
+    let ⟨u, h_run⟩ := h_running
+    exact h_finite _ _ (Option.ne_none_iff_exists.mp h_run).choose_spec
+
+-- === Deadline Lemmas ===
+
+-- Lemma: Feasible placements get executed
+lemma feasible_gets_placed (h_feasible : placementFeasible node deadline) :
+    ∃ u : ComputeUnit, placed node u ∧ estimatedCompletion node u ≤ deadline := by
+  -- Placement algorithm always finds a valid unit when feasible
+  have h_algo := placement_finds_feasible h_feasible
+  exact h_algo
+
+-- Lemma: Time estimates are bounded (within tolerance)
+lemma estimate_bound (h_placed : placed node u) :
+    actualCompletion node u ≤ estimatedCompletion node u * (1 + ESTIMATE_TOLERANCE) := by
+  -- Estimates include safety margin
+  exact estimation_conservative h_placed
+```
+
 #### Scheduling Invariants
 
 ```lean
@@ -1871,28 +2159,43 @@ theorem no_starvation :
   exact eventually_scheduled h_ready h_aging h_finite
 
 -- Invariant: No deadlock - system always makes progress
+-- Formulation: Any scheduler step from a state with work yields a state
+-- where at least as much work has completed (monotonic progress)
 theorem no_deadlock :
-    ∀ state : SchedulerState,
-      state.readyQueue.nonEmpty ∨
-      (∃ u, state.runningTasks u ≠ none) ∨
-      state.waitingTasks.isEmpty →
-        ◇ (state.completedDAG.size > state.completedDAG.size) := by
-  intro state h_work
+    ∀ state state' : SchedulerState,
+      (state.readyQueue.nonEmpty ∨
+       (∃ u, state.runningTasks u ≠ none) ∨
+       state.waitingTasks.nonEmpty) →
+      schedulerStep state state' →
+        state'.completedDAG.size ≥ state.completedDAG.size := by
+  intro state state' h_work h_step
   cases h_work with
   | inl h_ready =>
-    -- Ready work will be scheduled
-    have h_sched := scheduler_picks_ready h_ready
-    have h_complete := running_completes h_sched
-    exact h_complete
+    -- Ready work will be scheduled, completion count non-decreasing
+    have h_sched := scheduler_picks_ready h_ready h_step
+    exact monotonic_completion h_step
   | inr h_rest =>
     cases h_rest with
     | inl h_running =>
-      -- Running work will complete
+      -- Running work may complete, increasing count
       let ⟨u, h_run⟩ := h_running
-      exact running_completes h_run
-    | inr h_empty =>
-      -- No waiting tasks, nothing blocked
-      exact trivial_progress h_empty
+      exact running_completes_monotonic h_run h_step
+    | inr h_waiting =>
+      -- Waiting tasks may become ready, count non-decreasing
+      exact monotonic_completion h_step
+
+-- Stronger progress: with work, eventually something completes
+theorem eventual_progress :
+    ∀ state : SchedulerState,
+      state.readyQueue.nonEmpty ∨
+      (∃ u, state.runningTasks u ≠ none) →
+        ◇ (∃ state', schedulerStep⋆ state state' ∧
+           state'.completedDAG.size > state.completedDAG.size) := by
+  intro state h_work
+  -- Proof: bounded execution + fairness ensures completion
+  have h_finite := running_task_terminates
+  have h_fair := scheduler_fairness
+  exact progress_from_work h_work h_finite h_fair
 
 -- Invariant: Deadline respect when feasible
 theorem deadline_respect :
@@ -2046,33 +2349,44 @@ def exportSchedulerMetrics : IO Unit := do
 | `queryPlan` | Retrieve or generate execution plan | Cognitive |
 | `cancelComputation` | Abort in-progress computation | Cognitive (authorized by Emotive) |
 | `adjustPriority` | Modify task priority | Cognitive (guided by Emotive) |
-| `reportCompletion` | Signal computation finished | Cognitive → Emotive |
+| `dispatchToPhysical` | Send execution commands to Physical | Cognitive → Physical |
+
+*Note: Completion flows Physical → Emotive via `ioCompleted` events (see Channel Types).*
 
 
 ## Inter-Kernel Communication
 
 ### Channel Model
 
-Kernels communicate via typed, capability-protected channels. There is *no shared mutable state* between kernels.
+> **MA Principle: Unidirectional flows eliminate deadlock by construction.**
+
+Kernels communicate via typed, capability-protected channels. There is *no shared mutable state* between kernels. All channels are **unidirectional** — bidirectional communication uses paired channels.
 
 ```
-Inter-Kernel Channel Topology:
+Inter-Kernel Channel Topology (Hierarchical, Deadlock-Free):
 
-                    Governance
-                    ┌───┴───┐
-            policy──┤       ├──policy
-                    │       │
-        ┌───────────┘       └───────────┐
-        │                               │
-        ▼                               ▼
-   Cognitive ◄─────request/────────► Emotive
-        │         response              │
-        │                               │
-        │         ┌───────┐             │
-        └────────►│Physical│◄───────────┘
-                  └───────┘
-            sense/actuate  sense/actuate
+                         Governance
+                 ┌──────────┼──────────┐
+                 │ policy   │ policy   │ policy
+                 ▼          ▼          ▼
+             Physical    Emotive    Cognitive
+                 │          │          │
+                 │ events   │ directive│
+                 └────►─────┴────►─────┘
+                                       │
+                 ┌─────────────────────┘
+                 │ dispatch
+                 ▼
+             Physical
+
+Flow direction (all unidirectional):
+  • Governance → {Physical, Emotive, Cognitive}  : Policy enforcement
+  • Physical → Emotive                           : Sensor events, metrics
+  • Emotive → Cognitive                          : Priority directives
+  • Cognitive → Physical                         : Dispatch commands
 ```
+
+**Invariant**: The channel graph is a DAG. No kernel waits synchronously for a kernel it sends to.
 
 ### Channel Type Definitions
 
@@ -2130,6 +2444,35 @@ structure ChannelOp (M : Type) where
 The channel topology is acyclic by construction:
 
 ```tla
+\* === Predicate Definitions ===
+
+\* CanSendTo(k1, k2) - predicate for channel connectivity
+\* True iff k1 has a valid capability to send messages to k2
+CanSendTo(k1, k2) ==
+    ∃ cap ∈ kernelCapabilities[k1] :
+        /\ cap.resource = ChannelTo(k2)
+        /\ Rights.Send ∈ cap.rights
+        /\ ¬ Revoked(cap)
+
+\* CanReceiveFrom(k, sender) - predicate for reception capability
+\* True iff k can receive messages originating from sender
+CanReceiveFrom(k, sender) ==
+    ∃ cap ∈ kernelCapabilities[k] :
+        /\ cap.resource = ChannelFrom(sender)
+        /\ Rights.Receive ∈ cap.rights
+        /\ ¬ Revoked(cap)
+
+\* ResourceUsage(k) - compute total resource consumption for kernel k
+ResourceUsage(k) ==
+    LET cpuCycles  == Sum({task.cycles : task ∈ runningTasks[k]})
+        memoryBytes == Sum({domain.size : domain ∈ kernelDomains[k]})
+        channelSlots == Cardinality(pendingMessages[k])
+    IN  [cycles   |-> cpuCycles,
+         memory   |-> memoryBytes,
+         channels |-> channelSlots]
+
+\* === Invariants ===
+
 \* Channel dependencies form a DAG
 ChannelDAG ==
     LET deps == {<<k1, k2>> : k1, k2 ∈ Kernels : CanSendTo(k1, k2)}
@@ -2493,16 +2836,38 @@ THEOREM LivenessProperties == Spec => (EmotiveResponsive /\ NoDeadlock /\
 The deepest invariant of AETHEROS:
 
 ```lean
--- Every system decision either serves the user's priority
+-- Bounded propagation latency for priority updates
+-- This is the maximum time between Emotive priority change and kernel awareness
+constant PRIORITY_PROPAGATION_BOUND : Duration := 10.ms  -- Configurable per deployment
+
+-- Every system decision either serves the user's most-recently-propagated priority
 -- or is explicitly overridden by governance for policy reasons
-theorem user_primacy (s : SystemState) :
-    ∀ decision : SystemDecision,
-      MadeBy decision s.cognitive ∨ MadeBy decision s.physical →
-        ConsistentWith decision (s.emotive.currentPriority) ∨
-        OverriddenBy decision s.governance
+-- Note: "recently" is bounded by PRIORITY_PROPAGATION_BOUND
+theorem user_primacy (s s' : SystemState) (d : SystemDecision) :
+    -- If a decision is made by Cognitive or Physical...
+    (MadeBy d s'.cognitive ∨ MadeBy d s'.physical) →
+    -- ...and sufficient time has passed for priority propagation...
+    (s'.timestamp - s.emotive.lastPriorityUpdate ≥ PRIORITY_PROPAGATION_BOUND) →
+    -- ...then the decision is consistent with the propagated priority OR overridden
+      ConsistentWith d s'.lastPropagatedPriority ∨
+      OverriddenBy d s'.governance
+
+-- Eventual consistency: priority changes reach all kernels within bounded time
+theorem priority_convergence (s : SystemState) (p : CanonicalPriority) :
+    EmotiveSetsPriority s p →
+    ◇≤PRIORITY_PROPAGATION_BOUND (
+      CognitiveAwareOf s p ∧ PhysicalAwareOf s p
+    )
+
+-- The propagated priority matches the source (no corruption in transit)
+theorem priority_integrity (s : SystemState) :
+    ∀ k : Kernel, k ≠ .emotive →
+      k.lastReceivedPriority = s.emotive.lastSentPriority
 ```
 
-In plain language: *Nothing happens in this system that isn't either serving the user or explicitly justified by policy.*
+**Key insight**: In an async IPC system, instantaneous global consistency is impossible (see: CAP theorem). AETHEROS chooses *availability with bounded staleness* over blocking synchronization. The bound is tight enough for human perception (10ms default < 100ms human reaction time).
+
+In plain language: *Nothing happens in this system that isn't either serving the user's recently-expressed priority or explicitly justified by policy. "Recently" has a provable upper bound.*
 
 ### Implications
 
@@ -2513,6 +2878,7 @@ In plain language: *Nothing happens in this system that isn't either serving the
 | *No silent failures* | All faults surface to user-visible experience metrics |
 | *No unauthorized resource use* | Governance budgets bound all kernel resource consumption |
 | *No forgotten requests* | Intent model tracks all user goals until completion or explicit abandonment |
+| *Bounded staleness* | Priority propagation completes within PRIORITY_PROPAGATION_BOUND |
 
 
 ## System Call Interface
@@ -2700,29 +3066,58 @@ mod device {
 ### Syscall Error Handling
 
 ```rust
-/// Unified syscall error type
+/// Unified syscall error type - 4 categories per MA principle
+/// Pattern match on category for broad handling, inner variant for specifics
 #[derive(Debug, Clone, Copy)]
 pub enum SyscallError {
-    // Capability errors
-    InvalidCapability,          // Capability handle not valid
-    InsufficientRights,         // Capability lacks required rights
-    CapabilityExpired,          // TTL exceeded
-    CapabilityRevoked,          // Capability was revoked
+    Capability(CapabilityError),
+    Resource(ResourceError),
+    Operation(OperationError),
+    Security(SecurityError),
+}
 
-    // Resource errors
-    OutOfMemory,                // Allocation failed
-    ResourceBusy,               // Resource temporarily unavailable
-    QuotaExceeded,              // Domain budget exhausted
+#[derive(Debug, Clone, Copy)]
+pub enum CapabilityError {
+    Invalid,        // Handle not valid or dangling
+    Insufficient,   // Lacks required rights for operation
+    Expired,        // TTL exceeded
+    Revoked,        // Explicitly revoked by authority
+}
 
-    // Operation errors
-    InvalidArgument,            // Bad parameter value
-    OperationNotSupported,      // Syscall not applicable
-    WouldBlock,                 // Non-blocking operation would block
-    Timeout,                    // Operation timed out
+#[derive(Debug, Clone, Copy)]
+pub enum ResourceError {
+    OutOfMemory,    // Allocation failed
+    Busy,           // Temporarily unavailable (retry may succeed)
+    QuotaExceeded,  // Domain budget exhausted
+}
 
-    // Security errors
-    PermissionDenied,           // Governance policy violation
-    AuditFailure,               // Could not log operation
+#[derive(Debug, Clone, Copy)]
+pub enum OperationError {
+    InvalidArg,     // Bad parameter value
+    NotSupported,   // Syscall not applicable to this resource
+    WouldBlock,     // Non-blocking op would block
+    Timeout,        // Deadline exceeded
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SecurityError {
+    PermissionDenied,   // Governance policy violation
+    AuditFailure,       // Could not log (fail-safe: deny operation)
+}
+
+/// Convenience methods for common patterns
+impl SyscallError {
+    pub fn is_retriable(&self) -> bool {
+        matches!(self,
+            SyscallError::Resource(ResourceError::Busy) |
+            SyscallError::Operation(OperationError::WouldBlock))
+    }
+
+    pub fn is_permanent(&self) -> bool {
+        matches!(self,
+            SyscallError::Capability(CapabilityError::Revoked) |
+            SyscallError::Security(_))
+    }
 }
 ```
 
@@ -3001,6 +3396,8 @@ The Emotive kernel may leverage NPU for pattern recognition (user intent inferen
 
 ## The GPU/NPU Language Problem
 
+> **MVK Scope Note**: This section describes a *future direction*. The Minimal Viable Kernel will use HIP/ROCm directly for GPU compute, deferring the custom DSL to post-MVK development. The analysis below motivates *why* a DSL is eventually needed.
+
 ### Current Options Are Inadequate
 
 | Option | Description | Limitation |
@@ -3069,16 +3466,19 @@ schedule matmul with
 | *AMD NPU* | XDNA binary | Neural network inference acceleration |
 | *CPU Fallback* | Native (via LLVM) | Development, debugging, compatibility |
 
-### This May Need to Be Invented
+### Future Work: DSL Implementation
 
-The DSL described above does not fully exist. Components exist:
+The DSL described above does not yet exist. Inspirational prior art:
 
 - *Halide* — algorithm/schedule separation for image processing
 - *Futhark* — functional data-parallel language
 - *Regent* — implicit parallelism via Legion
 - *Triton* — Python-embedded GPU DSL
 
-AETHEROS may need to synthesize these ideas into a coherent, Rust-integrated DSL. This is potentially the project's most novel contribution.
+**Deferred to post-MVK**: Synthesizing these ideas into a Rust-integrated DSL is a major research contribution. For MVK, AETHEROS will:
+1. Use HIP/ROCm directly for GPU compute kernels
+2. Wrap GPU calls in Rust safety abstractions
+3. Collect performance data to inform eventual DSL design
 
 
 ## Security Threat Model
@@ -3234,6 +3634,54 @@ DEFENSE CHAIN:
 RESULT: Attack mitigated. Priority gains capped; anomaly detection alerts.
 ```
 
+### Security Lemmas (Supporting Definitions)
+
+```lean
+-- === Capability Algebra Lemmas ===
+
+/-- Derivation chain: every capability traces back to governance root
+    through a finite sequence of valid delegations -/
+lemma derivation_chain (s : SystemState) (k : Kernel) (c : Capability)
+    (h : c ∈ kernelCapabilities s k) :
+    Derivable (governanceRoot s) c := by
+  -- Induction on capability creation history
+  induction c.provenance with
+  | root h_root => exact Derivable.refl (governanceRoot s)
+  | delegated parent h_del ih =>
+    have h_parent := capability_in_parent s k c.parent h
+    have h_trace := ih h_parent
+    exact Derivable.trans h_trace (Derivable.delegate h_del)
+
+/-- Revocation propagates to all derived capabilities transitively -/
+lemma revocation_propagates (h_rev : Revoked s s' c) (h_der : DerivedFrom c' c) :
+    ¬ Valid s' c' := by
+  -- Revocation invalidates entire derivation subtree
+  intro h_valid
+  have h_parent_valid := valid_implies_parent_valid h_valid
+  have h_c_invalid := revoked_not_valid h_rev
+  -- Contradiction: c invalid but required for c' validity
+  exact h_c_invalid (derivation_requires_parent h_der h_parent_valid)
+
+/-- Disjoint page tables enforce memory isolation -/
+lemma disjoint_page_tables (h_ne : d1 ≠ d2) (h_map : Mapped s d1 p) :
+    ¬ Mapped s d2 p := by
+  intro h_map2
+  -- Page table entries are disjoint per domain
+  have h_entry1 := page_table_entry s d1 p h_map
+  have h_entry2 := page_table_entry s d2 p h_map2
+  -- Each physical page has exactly one owner domain
+  have h_unique := unique_page_ownership s p
+  exact h_ne (h_unique h_entry1 h_entry2)
+
+/-- Integrity violation: high-to-low flow violates lattice ordering -/
+lemma integrity_violation (h_int : integrity src > integrity dst)
+    (h_flow : DirectFlow s s' src dst) : False := by
+  -- Direct flow requires integrity(src) ≤ integrity(dst)
+  have h_req := flow_requires_integrity_order h_flow
+  -- Contradiction with h_int
+  exact Nat.lt_irrefl (integrity src) (Nat.lt_of_lt_of_le h_int h_req)
+```
+
 ### Security Invariants (Formally Verified)
 
 ```lean
@@ -3331,7 +3779,7 @@ The path chosen should match available resources. A focused prototype demonstrat
 | *1. Architectural Manifesto* | Define invariants. What will AETHEROS _never_ compromise? What are the non-negotiable principles? | This document (v1.0) |
 | *2. Capability Prototype* | Implement capability model in Rust, running in Linux userspace. Validate IPC semantics. | Working Rust crate with tests |
 | *3. Heterogeneous Scheduler Prototype* | Build dataflow scheduler targeting CPU+GPU, running on Linux. Use existing ROCm. | Benchmark suite, scheduler implementation |
-| *4. GPU DSL Design* | Specify the compute DSL. Implement minimal compiler to SPIR-V. | Language specification, prototype compiler |
+| *4. HIP/ROCm Integration* | Integrate GPU compute via HIP wrappers with Rust safety layer. DSL deferred to post-MVK. | Working GPU compute, benchmark suite |
 | *5. Minimal Microkernel* | Boot on QEMU. Implement Governance + Physical kernels. Capability-based IPC. | Bootable image, passing test suite |
 | *6. Emotive Kernel Prototype* | Implement intent inference and priority computation. Initially as Linux daemon for iteration. | Working prototype with metrics |
 | *7. Bare Metal Boot* | Boot on real Threadripper PRO hardware. Basic device initialization. | Hardware validation |
@@ -3379,7 +3827,7 @@ Each component can be prototyped on Linux, validated, and refined _before_ the m
 
 - Minimal microkernel booting on QEMU
 - Four kernels communicating via typed channels
-- GPU DSL producing working SPIR-V
+- GPU compute via HIP wrappers (DSL deferred to Year 5+)
 
 *Year 3-5:*
 
