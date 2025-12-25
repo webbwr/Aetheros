@@ -179,7 +179,7 @@ flowchart TB
 
 ### Key Innovations
 
-AETHEROS introduces four fundamental innovations that distinguish it from all existing operating systems:
+AETHEROS introduces five fundamental innovations that distinguish it from all existing operating systems:
 
 #### 1. Capabilities, Not Permissions
 
@@ -231,6 +231,25 @@ session GPUJob where
   server sends   : JobHandle
   -- ...
 ```
+
+#### 5. Tripartite Network Channels
+
+All network communication is classified into three isolated channel classes with strict security boundaries:
+
+| Channel | Purpose | Security |
+|---------|---------|----------|
+| **Internal Local** | System telemetry, health monitoring | Highest priority, physically isolated partition |
+| **Private** | User-initiated trusted communications | Encrypted, user-approved endpoints |
+| **Inbound Public** | External internet traffic | NEVER routes to System actor |
+
+```
+Priority: Internal (1) > Private (2) > Public (3)
+
+Critical invariant: System actor NEVER receives from public channels
+                    Internal partition NEVER shares resources with public
+```
+
+This eliminates entire classes of attacks where external traffic could influence system behavior.
 
 ### System Layers
 
@@ -2523,6 +2542,205 @@ structure ChannelOp (M : Type) where
   message    : M
 ```
 
+### Network Channel Classification (Tripartite Model)
+
+> **MA Principle: Three channel classes with strict isolation eliminate external attack surface on system internals.**
+
+AETHEROS classifies all network communication into three distinct channel classes with different trust levels, priority, and routing rules:
+
+| Channel Class | Initiator | Recipients | Trust Level | Priority |
+|---------------|-----------|------------|-------------|----------|
+| **Internal Local** | System (automatic) | System only | Implicit (local) | Highest (1) |
+| **Private** | Human, SI, System | Any actor (trusted endpoints) | Explicit (user-initiated) | Medium (2) |
+| **Inbound Public** | External sources | Human, SI only | Untrusted (verified) | Lowest (3) |
+
+```
+Network Channel Topology (Partitioned by Class):
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                        INTERNAL LOCAL (Class 1)                      │
+│  ┌─────────────┐    telemetry    ┌─────────────┐                    │
+│  │   System    │◄───────────────►│  Governance │                    │
+│  │   Actor     │     health      │   Kernel    │                    │
+│  └─────────────┘                 └─────────────┘                    │
+│         ▲                                                            │
+│         │ metrics                                                    │
+│  ┌──────┴──────┐                                                    │
+│  │  Physical   │  (System telemetry NEVER leaves this partition)    │
+│  │   Kernel    │                                                    │
+│  └─────────────┘                                                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                         PRIVATE (Class 2)                            │
+│  ┌─────────────┐    request     ┌─────────────┐                     │
+│  │   Human     │───────────────►│  External   │                     │
+│  │   Actor     │◄───────────────│  Service    │                     │
+│  └─────────────┘    response    └─────────────┘                     │
+│         │                              ▲                             │
+│         │ delegate                     │ API call                    │
+│         ▼                              │                             │
+│  ┌─────────────┐──────────────────────┘                             │
+│  │   SI Actor  │  (User-initiated, trusted endpoints)              │
+│  └─────────────┘                                                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                      INBOUND PUBLIC (Class 3)                        │
+│                                                                      │
+│  ┌─────────────┐                 ┌─────────────┐                    │
+│  │  External   │────────────────►│   Human     │                    │
+│  │  Internet   │                 │   Actor     │                    │
+│  └─────────────┘                 └─────────────┘                    │
+│         │                              │                             │
+│         │ (verified)                   │ forward                     │
+│         ▼                              ▼                             │
+│  ┌─────────────┐                 ┌─────────────┐                    │
+│  │  Firewall   │                 │   SI Actor  │                    │
+│  │  Gateway    │                 │  (on behalf │                    │
+│  └─────────────┘                 │  of Human)  │                    │
+│                                  └─────────────┘                    │
+│         ╳ NEVER routes to System Actor                              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Channel Class Definitions
+
+```lean
+-- The three network channel classes
+inductive NetworkChannelClass where
+  | internal   -- System telemetry, health, internal coordination
+  | private_   -- User-initiated trusted communications
+  | public     -- Inbound from external/untrusted sources
+  deriving DecidableEq, Ord, Repr
+
+-- Channel priority (lower number = higher priority)
+def NetworkChannelClass.priority : NetworkChannelClass → Nat
+  | .internal => 1   -- Highest: system health is critical
+  | .private_ => 2   -- Medium: user-initiated requests
+  | .public   => 3   -- Lowest: external, potentially hostile
+
+-- Who can initiate on each channel class
+def NetworkChannelClass.validInitiators : NetworkChannelClass → List ActorType
+  | .internal => [.system]                    -- System only
+  | .private_ => [.human, .synthetic, .system]  -- Any trusted actor
+  | .public   => []                           -- External only (no internal initiator)
+
+-- Who can receive on each channel class
+def NetworkChannelClass.validRecipients : NetworkChannelClass → List ActorType
+  | .internal => [.system]                    -- System only (partitioned)
+  | .private_ => [.human, .synthetic, .system]  -- Any actor
+  | .public   => [.human, .synthetic]         -- NEVER System
+```
+
+#### Network Channel Structure
+
+```lean
+structure NetworkChannel where
+  id          : ChannelId
+  class_      : NetworkChannelClass
+  initiator   : Option Actor       -- None for public (external)
+  recipient   : Actor
+  endpoint    : NetworkEndpoint
+  encrypted   : Bool               -- Always true for private/public
+  verified    : Bool               -- Cryptographic verification status
+
+-- Network endpoint with trust classification
+structure NetworkEndpoint where
+  address     : NetworkAddress
+  port        : Port
+  protocol    : Protocol
+  trustLevel  : TrustLevel
+  certificate : Option Certificate
+
+inductive TrustLevel where
+  | local       -- Internal only, no network
+  | trusted     -- User-approved endpoint
+  | verified    -- Cryptographically verified
+  | untrusted   -- Public internet, sandboxed
+```
+
+#### Channel Routing Rules
+
+```lean
+-- Validate that a channel operation is permitted
+def NetworkChannel.isValidRoute (ch : NetworkChannel) (msg : Message) : Bool :=
+  match ch.class_ with
+  | .internal =>
+      -- Internal: only System actors, never leaves local partition
+      ch.recipient.actorType = .system ∧
+      ch.endpoint.trustLevel = .local ∧
+      ¬ msg.containsExternalReference
+  | .private_ =>
+      -- Private: user-initiated, any trusted recipient
+      ch.initiator.isSome ∧
+      ch.endpoint.trustLevel ∈ [.trusted, .verified] ∧
+      ch.encrypted
+  | .public =>
+      -- Public: external source, NEVER to System
+      ch.initiator.isNone ∧
+      ch.recipient.actorType ≠ .system ∧
+      ch.verified ∧
+      ch.encrypted
+
+-- System actor can NEVER receive from public channel
+theorem system_never_receives_public (ch : NetworkChannel) (sys : Actor) :
+    ch.class_ = .public →
+    sys.actorType = .system →
+    ch.recipient ≠ sys := by
+  intro hPublic hSystem
+  simp [NetworkChannel.isValidRoute]
+  exact ne_of_actorType_ne hSystem
+```
+
+#### Channel Partition Isolation
+
+The Internal Local channel class operates in a **completely separate processing partition**:
+
+```lean
+structure ChannelPartition where
+  class_        : NetworkChannelClass
+  messageQueue  : Queue Message
+  processor     : ProcessorAffinity   -- Dedicated CPU cores
+  memoryRegion  : MemoryRegion        -- Isolated memory
+  scheduler     : SchedulerConfig
+
+-- Internal partition is physically isolated
+def internalPartition : ChannelPartition := {
+  class_       := .internal,
+  messageQueue := dedicatedInternalQueue,
+  processor    := .dedicated [0, 1],     -- Reserved cores
+  memoryRegion := .isolated internalRegion,
+  scheduler    := { preemptive := true, maxLatency := 100.μs }
+}
+
+-- Invariant: Internal partition never shares resources with public
+theorem partition_isolation (internal pub : ChannelPartition) :
+    internal.class_ = .internal →
+    pub.class_ = .public →
+    Disjoint internal.memoryRegion pub.memoryRegion ∧
+    Disjoint internal.processor pub.processor := by
+  intro hInt hPub
+  exact ⟨internalMemoryIsolation hInt hPub, internalCpuIsolation hInt hPub⟩
+```
+
+#### Channel Priority Processing
+
+```lean
+-- Messages are processed in priority order by channel class
+def processChannels (partitions : List ChannelPartition) : IO Unit := do
+  -- Sort by priority (internal first, then private, then public)
+  let sorted := partitions.sortBy (·.class_.priority)
+  for partition in sorted do
+    -- Internal always processed first, regardless of queue depth
+    processPartition partition
+
+-- Priority inversion prevention: internal can preempt public processing
+theorem no_priority_inversion (internal pub : ChannelPartition) (t : Time) :
+    internal.class_ = .internal →
+    pub.class_ = .public →
+    internal.messageQueue.hasMessages t →
+    ¬ Processing pub t ∨ Preempted pub internal t := by
+  intro hInt hPub hMsg
+  exact internal_preempts_public hInt hPub hMsg
+```
+
 ### Deadlock Freedom
 
 The channel topology is acyclic by construction:
@@ -4450,19 +4668,26 @@ This walkthrough demonstrates that AETHEROS is not merely a collection of abstra
 
 | Term | Definition |
 |---|---|
+| *Actor* | Principal with identity and authority (Human, System, or Synthetic Intelligence) |
 | *Capability* | Unforgeable token encoding authority to act on a resource |
 | *Channel* | Typed, capability-protected conduit for inter-kernel communication |
+| *Channel Class* | Network channel classification (Internal, Private, or Public) |
 | *Checkpoint* | Consistent snapshot of system state for persistence/recovery |
 | *Compute Graph* | Dataflow representation of computation with explicit dependencies |
 | *Domain* | Isolated state container; unit of protection |
 | *Epoch* | Monotonic counter tracking system state versions |
+| *Inbound Public* | Network channel class for external/untrusted sources; NEVER routes to System actor |
+| *Internal Local* | Network channel class for system telemetry; highest priority, isolated partition |
 | *Invariant* | Property that must hold across all state transitions |
 | *MA (間)* | Japanese aesthetic principle of meaningful negative space |
+| *Private Channel* | Network channel class for user-initiated trusted communications |
 | *Provenance* | Capability lineage for revocation tracking |
 | *Resource* | Any entity that can be owned, accessed, or consumed |
 | *Rights* | Permissions encoded in a capability (read, write, execute, grant, revoke) |
 | *Session Type* | Type encoding valid sequences of channel operations |
+| *SI (Synthetic Intelligence)* | AI actor type; authority delegated by Human or System |
 | *Transition* | Function mapping current state + event to new state |
+| *Tripartite Model* | Three-way classification (actors: Human/System/SI; channels: Internal/Private/Public) |
 
 
 ## Appendix B: AMD Platform Specifications
