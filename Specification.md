@@ -846,6 +846,78 @@ The Governance kernel is the _constitutional authority_ of the system. It:
 - Manages resource budgets across the system
 - Maintains audit logs for accountability
 
+#### Telemetry Aggregation: All Kernels
+
+The Governance kernel receives and aggregates health telemetry from **all other kernels**:
+
+| Source Kernel | Telemetry Received | Governance Action |
+|---------------|-------------------|-------------------|
+| **Physical** | System actor health (hardware, resources) | Resource budget enforcement |
+| **Emotive** | Human health, usefulness, performance | User primacy verification |
+| **Cognitive** | SI health, accuracy, truthfulness | Capability scope enforcement |
+
+```lean
+-- Aggregate health from all kernels
+structure AggregateHealth where
+  physical  : SystemActorHealth    -- From Physical kernel
+  emotive   : HumanActorHealth     -- From Emotive kernel
+  cognitive : SIActorHealth        -- From Cognitive kernel
+
+  -- Computed aggregates
+  overallHealth   : Score          -- Weighted combination
+  healthyKernels  : Count          -- Kernels meeting thresholds
+  criticalAlerts  : List Alert     -- Cross-kernel issues
+
+-- Is the overall system healthy?
+def Governance.isSystemHealthy (s : GovernanceState) : Bool :=
+  s.aggregateHealth.healthyKernels = 3 ∧  -- All kernels healthy
+  s.aggregateHealth.criticalAlerts.isEmpty
+```
+
+#### System-Wide Responsibility: Security and Policy
+
+The Governance kernel owns all **security and policy telemetry**:
+
+| Telemetry Domain | Metrics | Health Indicators |
+|------------------|---------|-------------------|
+| **Capabilities** | Grants, revocations, derivations | Escalation attempts, orphaned caps |
+| **Policy** | Rule evaluations, violations, overrides | Policy drift, conflict rate |
+| **Audit** | Log entries, queries, integrity checks | Log tampering, gaps |
+| **Cross-Kernel** | IPC messages, arbitrations, budgets | Deadlock detection, resource exhaustion |
+
+```lean
+-- Security health: is the system maintaining its security invariants?
+structure SecurityHealth where
+  -- Capability integrity
+  capabilityChainValid   : Bool      -- All caps trace to root
+  escalationAttempts     : Count     -- Unauthorized privilege requests
+  revocationLatency      : Duration  -- Time to propagate revocations
+
+  -- Policy compliance
+  policyViolations       : Count     -- Rules broken (should be 0)
+  invariantsSatisfied    : Ratio     -- Active invariants holding
+  auditIntegrity         : Bool      -- Log hash chain valid
+
+  -- Cross-kernel security
+  ipcAnomalies           : Count     -- Unexpected message patterns
+  budgetOverruns         : Count     -- Kernels exceeding quotas
+
+-- Is the security posture acceptable?
+def Governance.isSecurityHealthy (s : GovernanceState) : Bool :=
+  s.securityHealth.capabilityChainValid ∧
+  s.securityHealth.policyViolations = 0 ∧
+  s.securityHealth.invariantsSatisfied = 1.0 ∧
+  s.securityHealth.auditIntegrity
+
+-- Critical: User Primacy Invariant check
+def Governance.isUserPrimacyMaintained (s : GovernanceState) : Bool :=
+  s.aggregateHealth.emotive.valueRealization.goalCompletionRate > 0.7 ∧
+  s.securityHealth.policyViolations = 0 ∧
+  s.aggregateHealth.emotive.performanceHealth.perceivedLag < 0.5
+```
+
+Governance is the only kernel that sees the full system picture—it's the constitutional watchdog ensuring all kernels serve the Human.
+
 ### State Structure
 
 ```lean
@@ -904,6 +976,20 @@ The Physical kernel is the _embodiment_ of the system. It:
 - Manages device state
 - Provides timing services
 - Interfaces with GPU and NPU hardware
+
+#### Telemetry Ownership: System Actor
+
+The Physical kernel owns all **System actor** telemetry and health:
+
+| Telemetry Domain | Metrics | Health Indicators |
+|------------------|---------|-------------------|
+| **Hardware** | CPU utilization, temperature, power | Thermal limits, power budget |
+| **Memory** | Usage, fragmentation, DMA activity | Pressure thresholds, leak detection |
+| **Storage** | I/O throughput, latency, queue depth | Disk health, SMART status |
+| **Network** | Bandwidth, packet rates, errors | Link status, congestion |
+| **Compute Units** | GPU/NPU utilization, memory | Driver health, thermal throttling |
+
+The Physical kernel reports aggregated System health to Governance via the Internal Local channel.
 
 ### State Structure
 
@@ -1387,6 +1473,83 @@ The Emotive kernel is the _user's advocate_. It:
 - Ensures the system serves human needs
 
 This is the only kernel that reasons about _subjective experience_.
+
+#### Telemetry Ownership: Human Actor
+
+The Emotive kernel owns all **Human actor** telemetry and health:
+
+| Telemetry Domain | Metrics | Health Indicators |
+|------------------|---------|-------------------|
+| **UI/UX** | Response latency, render quality, interaction flow | Frustration detection, flow state |
+| **Engagement** | Input patterns, attention signals, presence | Focus quality, fatigue indicators |
+| **Experience** | Task completion, error encounters, recovery | Satisfaction score, friction points |
+| **Intent** | Goal inference confidence, prediction accuracy | Intent clarity, context coherence |
+
+#### System-Wide Responsibility: Value Realization
+
+The Emotive kernel also owns the **overall usefulness** (value realization) metric for the entire system:
+
+```lean
+-- Value realization: is the system actually helping the Human achieve their goals?
+structure ValueRealization where
+  goalCompletionRate   : Ratio       -- Goals achieved / goals attempted
+  effortEfficiency     : Ratio       -- Value delivered / effort expended
+  timeToValue          : Duration    -- How quickly goals are achieved
+  unexpectedValue      : Score       -- Positive surprises (system anticipates needs)
+  frictionIndex        : Score       -- Obstacles encountered (lower is better)
+
+-- The core usefulness question
+def Emotive.isSystemUseful (s : EmotiveState) : Bool :=
+  s.valueRealization.goalCompletionRate > 0.8 ∧
+  s.valueRealization.frictionIndex < 0.2 ∧
+  s.valueRealization.effortEfficiency > 0.7
+```
+
+The Emotive kernel reports Human health and system usefulness to Governance.
+
+#### System-Wide Responsibility: Performance Health
+
+The Emotive kernel also owns the **overall system performance health** metric—performance as experienced by the Human, not raw hardware metrics:
+
+```lean
+-- Performance health: how responsive and capable does the system feel?
+structure PerformanceHealth where
+  -- Responsiveness (perceived latency)
+  inputToResponse      : Latency        -- Time from input to visible response
+  taskCompletionTime   : Duration       -- How long operations take
+  perceivedLag         : Score          -- User-perceived slowness (0=instant, 1=frustrating)
+
+  -- Throughput (perceived productivity)
+  taskThroughput       : Rate           -- Tasks completed per unit time
+  parallelCapacity     : Count          -- How many things can run smoothly
+  resourceContention   : Score          -- Perceived bottleneck severity
+
+  -- Reliability (perceived stability)
+  errorRate            : Ratio          -- Errors per operation
+  recoveryTime         : Duration       -- How quickly errors resolve
+  unpredictability     : Score          -- How erratic the system feels
+
+  -- Capacity (perceived headroom)
+  perceivedHeadroom    : Ratio          -- How much capacity feels available
+  degradationWarning   : Bool           -- Is performance visibly declining?
+
+-- Is the system performing well from the Human's perspective?
+def Emotive.isSystemHealthy (s : EmotiveState) : Bool :=
+  s.performanceHealth.perceivedLag < 0.3 ∧
+  s.performanceHealth.errorRate < 0.01 ∧
+  s.performanceHealth.unpredictability < 0.2 ∧
+  s.performanceHealth.perceivedHeadroom > 0.3
+
+-- Combined usefulness + health check
+def Emotive.isSystemServing (s : EmotiveState) : Bool :=
+  s.isSystemUseful ∧ s.isSystemHealthy
+```
+
+This is distinct from Physical kernel's hardware metrics:
+- **Physical**: CPU at 80%, memory at 60GB, disk I/O 500MB/s
+- **Emotive**: User sees lag, feels slow, operations take too long
+
+The Emotive kernel translates raw metrics into human-perceivable performance health.
 
 ### The Core Question
 
@@ -1884,6 +2047,59 @@ The Cognitive kernel is the _reasoning engine_. It:
 - Optimizes resource utilization
 - Executes inference and deliberation
 - Responds to Emotive kernel priorities
+
+#### Telemetry Ownership: SI Actor
+
+The Cognitive kernel owns all **SI (Synthetic Intelligence) actor** telemetry and health:
+
+| Telemetry Domain | Metrics | Health Indicators |
+|------------------|---------|-------------------|
+| **Inference** | Model latency, tokens/sec, batch efficiency | Timeout rate, queue depth |
+| **Reasoning** | Decision quality, plan optimality, coherence | Logical consistency, constraint violations |
+| **Learning** | Adaptation rate, model drift, calibration | Overfitting detection, distribution shift |
+| **Resources** | GPU/NPU utilization, memory pressure, cache hits | Thermal limits, OOM events |
+
+#### System-Wide Responsibility: Accuracy
+
+The Cognitive kernel owns the **overall accuracy** (truthfulness, mathematical consistency) of the entire system:
+
+```lean
+-- Accuracy: is the SI producing correct, consistent, truthful outputs?
+structure AccuracyHealth where
+  -- Truthfulness (factual correctness)
+  factualAccuracy      : Ratio        -- Verifiable claims that are true
+  groundingScore       : Score        -- How well outputs match source data
+  hallucinationRate    : Ratio        -- Fabricated or unsupported claims
+
+  -- Mathematical Consistency
+  logicalValidity      : Ratio        -- Inferences that follow from premises
+  constraintSatisfaction : Ratio      -- Solutions that meet stated constraints
+  proofSoundness       : Ratio        -- Formal proofs that type-check
+
+  -- Calibration (confidence vs. correctness)
+  calibrationError     : Score        -- |P(correct) - stated_confidence|
+  uncertaintyQuality   : Score        -- "I don't know" when appropriate
+
+  -- Coherence (internal consistency)
+  selfConsistency      : Ratio        -- Answers same question same way
+  temporalStability    : Score        -- Doesn't contradict past outputs
+
+-- Is the SI producing reliable outputs?
+def Cognitive.isSystemAccurate (s : CognitiveState) : Bool :=
+  s.accuracyHealth.factualAccuracy > 0.95 ∧
+  s.accuracyHealth.hallucinationRate < 0.02 ∧
+  s.accuracyHealth.logicalValidity > 0.98 ∧
+  s.accuracyHealth.calibrationError < 0.15
+
+-- Critical accuracy check: mathematical proofs must be sound
+def Cognitive.isMathematicallySound (s : CognitiveState) : Bool :=
+  s.accuracyHealth.proofSoundness = 1.0 ∧  -- No unsound proofs ever
+  s.accuracyHealth.constraintSatisfaction > 0.99
+```
+
+This is the SI's core health metric—an SI that produces inaccurate outputs is not serving the Human, regardless of how fast or efficient it appears.
+
+The Cognitive kernel reports SI health and system accuracy to Governance.
 
 ### State Structure
 
@@ -3128,7 +3344,78 @@ THEOREM LivenessProperties == Spec => (EmotiveResponsive /\ NoDeadlock /\
 -- AETHEROS.Kernel.Emotive: Emotive kernel spec
 -- AETHEROS.Kernel.Cognitive: Cognitive kernel spec
 -- AETHEROS.System: Composed system and invariants
+-- AETHEROS.Telemetry: Telemetry ownership and health monitoring
 ```
+
+### Formal Telemetry Ownership Model
+
+The telemetry ownership model formally defines which kernel owns which actor's health:
+
+```lean
+-- Telemetry ownership is a function from Actor type to Kernel
+def telemetryOwner : ActorType → Kernel
+  | .system    => .physical   -- Physical kernel owns System actor telemetry
+  | .human     => .emotive    -- Emotive kernel owns Human actor telemetry
+  | .synthetic => .cognitive  -- Cognitive kernel owns SI actor telemetry
+
+-- Governance aggregates all, but does not own individual actor telemetry
+def governanceAggregates : List Kernel := [.physical, .emotive, .cognitive]
+
+-- Health report structure per kernel
+structure KernelHealthReport where
+  source      : Kernel
+  actorHealth : ActorType → Option HealthMetrics  -- Only for owned actors
+  systemWide  : Option SystemWideMetric           -- Kernel's system-wide responsibility
+  timestamp   : Timestamp
+
+-- System-wide responsibilities (each kernel owns one domain)
+inductive SystemWideResponsibility where
+  | usefulness     -- Emotive: is the system helpful?
+  | performance    -- Emotive: is the system responsive?
+  | accuracy       -- Cognitive: is the SI truthful?
+  | security       -- Governance: is the system secure?
+
+def systemWideOwner : SystemWideResponsibility → Kernel
+  | .usefulness   => .emotive
+  | .performance  => .emotive
+  | .accuracy     => .cognitive
+  | .security     => .governance
+
+-- Telemetry ownership invariant
+theorem telemetry_ownership_exclusive (k1 k2 : Kernel) (actor : ActorType) :
+    telemetryOwner actor = k1 →
+    telemetryOwner actor = k2 →
+    k1 = k2 := by
+  intro h1 h2
+  rw [h1, h2]
+
+-- Only the owner can report authoritative health for an actor
+theorem authoritative_health_report (r : KernelHealthReport) (actor : ActorType) :
+    r.actorHealth actor ≠ none →
+    telemetryOwner actor = r.source := by
+  intro h
+  -- Each kernel only reports health for actors it owns
+  exact ownership_implies_reporting r actor h
+
+-- Governance receives reports from all kernels
+theorem governance_receives_all (g : GovernanceState) :
+    ∀ k ∈ governanceAggregates, ∃ r : KernelHealthReport, r.source = k ∧ r ∈ g.receivedReports
+
+-- Health report flow invariant: reports flow upward to Governance
+theorem health_flows_to_governance (k : Kernel) (r : KernelHealthReport) :
+    k ≠ .governance →
+    r.source = k →
+    ◇ (r ∈ governanceState.receivedReports)
+```
+
+**Telemetry Ownership Summary**:
+
+| Actor Type | Owning Kernel | System-Wide Metric |
+|------------|---------------|-------------------|
+| System     | Physical      | (none) |
+| Human      | Emotive       | Usefulness + Performance |
+| SI         | Cognitive     | Accuracy |
+| (All)      | Governance    | Security + Aggregation |
 
 
 ## User Primacy Invariant
