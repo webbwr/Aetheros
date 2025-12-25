@@ -38,6 +38,27 @@ The system is defined as much by what it _excludes_ as what it includes. Every s
 > We shape clay into a pot, but it is the emptiness inside that holds whatever we want.
 > — *Lao Tzu*
 
+**Foundational Inspirations:**
+
+These principles inform every design decision in AETHEROS:
+
+> Conceptual [functional] simplicity, structural complexity achieves a greater state of humanity.
+> — *[Junctions](https://twitter.com/junctions/status/51782191914549248)*
+
+The system pursues intimate design experience—technology that disappears into use, becoming an extension of human capability rather than an obstacle to it.
+
+> — *Inspired by [Intimate Design](https://dl.acm.org/citation.cfm?id=964443)*
+
+> Expose and elucidate the GUIDs move behind labels.
+> — *[DavidSlight](http://davidslight.com)*
+
+Every abstraction in AETHEROS reveals its underlying identity on demand. Labels are conveniences; GUIDs are truth. The system never hides what it is behind what it appears to be.
+
+> Insulation of information to maximize transmission and consumption—the three tomes.
+> — *AETHEROS Design Principle*
+
+Information architecture in AETHEROS follows the three-tome model: **Interface** (what you see), **Implementation** (how it works), and **Intent** (why it exists). Each tome is insulated from the others, enabling independent evolution while preserving coherent consumption.
+
 **The MA Imperative:**
 
 | Principle | Meaning | Violation Example |
