@@ -51,9 +51,26 @@ Like a fractal or a fugue: simple generative rules producing rich emergent struc
 
 The system always knows what it is. No hidden state. No spooky action at a distance. No "reboot to fix it." State is explicit, observable, and recoverable.
 
-#### User Primacy
+#### User Primacy and the Tripartite Actor Model
 
-The human is not a "user" in the peripheral sense. The human is the _purpose_. Every computational act serves human intention or is explicitly justified by policy. The system is the user's advocate.
+The term "user" in AETHEROS encompasses three distinct actor types with hierarchical authority:
+
+| Actor | Description | Authority Source | Primary Objective |
+|-------|-------------|------------------|-------------------|
+| **Human** | The active human user | Constitutional (innate) | Own goals and intentions |
+| **System** | Internal automatic operations | Delegated by Governance | Platform health and maintenance |
+| **Synthetic Intelligence (SI)** | AI agents (local or remote) | Delegated by Human or System | Serve delegating principal |
+
+**Authority Hierarchy**: Human > SI (acting for Human) > System > SI (acting for System)
+
+The **Human** is not a "user" in the peripheral sense. The Human is the _purpose_. Every computational act ultimately serves Human intention or is explicitly justified by policy. The system is the Human's advocate.
+
+**Synthetic Intelligence** operates with delegated authority. An SI may act:
+- *For the Human* — highest SI authority, nearly equivalent to Human intent
+- *For itself* — self-maintenance, learning, capability within granted scope
+- *For the System* — lowest SI authority, background optimization tasks
+
+**System** actors perform maintenance functions (garbage collection, defragmentation, health monitoring) that the Human implicitly authorizes by using the platform.
 
 
 ## Architectural Overview
@@ -704,6 +721,51 @@ inductive Right where
 -- meet = intersection, join = union
 ```
 
+### Actor Model (Tripartite Principals)
+
+The system recognizes three types of actors—principals that may hold capabilities and initiate actions:
+
+```lean
+-- The three actor types in AETHEROS
+inductive ActorType where
+  | human      -- The active human user (constitutional authority)
+  | system     -- Internal automatic operations (delegated by governance)
+  | synthetic  -- AI/SI agents (delegated by human or system)
+  deriving DecidableEq, Repr
+
+-- For SI actors, track the delegating principal
+inductive SIDelegation where
+  | forHuman   -- Acting on human's behalf (highest SI authority)
+  | forSelf    -- Self-maintenance, learning (medium authority)
+  | forSystem  -- System optimization tasks (lowest SI authority)
+  deriving DecidableEq, Ord, Repr
+
+-- An actor identity with full provenance
+structure Actor where
+  id          : ActorId           -- Unique identifier
+  actorType   : ActorType         -- Human, System, or Synthetic
+  delegation  : Option SIDelegation  -- Only for synthetic actors
+  credentials : Credentials       -- Authentication proof
+  epoch       : Epoch             -- Session validity
+
+-- Authority ordering: Human > SI(forHuman) > System > SI(forSystem) > SI(forSelf)
+def Actor.authorityLevel (a : Actor) : Nat :=
+  match a.actorType, a.delegation with
+  | .human, _                   => 100  -- Highest authority
+  | .synthetic, some .forHuman  => 90   -- Near-human authority
+  | .system, _                  => 50   -- Platform maintenance
+  | .synthetic, some .forSystem => 30   -- System helper
+  | .synthetic, some .forSelf   => 20   -- Self-maintenance only
+  | .synthetic, none            => 10   -- Undelegated SI (minimal)
+
+-- SI acting for Human can nearly match Human authority
+-- but cannot exceed the delegating Human's own capabilities
+theorem si_authority_bounded (si : Actor) (human : Actor) :
+    si.actorType = .synthetic →
+    si.delegation = some .forHuman →
+    si.authorityLevel < human.authorityLevel
+```
+
 ### Capability Structure
 
 ```lean
@@ -1321,40 +1383,55 @@ structure EmotiveState where
   -- Temporal awareness
   currentMoment     : Moment
 
-  -- User modeling
-  intentModel       : IntentModel
-  userPresence      : PresenceState
-  userProfile       : UserProfile
+  -- Actor modeling (tripartite: Human, System, SI)
+  actorIntents      : Actor → IntentModel  -- Intent per actor
+  humanPresence     : PresenceState        -- Human engagement state
+  humanProfile      : UserProfile          -- Human preferences
+  activeActors      : List Actor           -- Currently active actors
 
-  -- Experience tracking
-  experienceHistory : RingBuffer (Moment × ExperienceQuality)
-  currentExperience : ExperienceQuality
+  -- Experience tracking (primarily for Human, but SI also monitored)
+  experienceHistory : RingBuffer (Moment × Actor × ExperienceQuality)
+  currentExperience : Actor → ExperienceQuality
 
-  -- System health (from user's perspective)
+  -- System health (from Human's perspective)
   healthSnapshot    : SystemHealth
 
-  -- Output
+  -- Output: priority considers all actors weighted by authority
   currentPriority   : Priority
+  lastPriorityUpdate: Moment  -- For bounded staleness tracking
+  lastSentPriority  : CanonicalPriority  -- For integrity verification
+
+-- Compute aggregate priority from all active actors
+def EmotiveState.computePriority (s : EmotiveState) : Priority :=
+  let weightedGoals := s.activeActors.flatMap fun actor =>
+    let weight := actor.authorityLevel.toFloat / 100.0
+    (s.actorIntents actor).goals.map fun goal =>
+      (goal, weight * (s.actorIntents actor).probabilities goal)
+  -- Human goals always dominate; SI/System goals fill gaps
+  prioritizeByAuthorityAndUrgency weightedGoals
 ```
 
-### Intent Model
+### Intent Model (Per-Actor)
 
 ```lean
--- User intent as probability distribution over goals
+-- Intent as probability distribution over goals, tracked per actor
 structure IntentModel where
+  actor         : Actor           -- Whose intent this models
   goals         : List Goal
   probabilities : Goal → Probability
   confidence    : Confidence
   lastUpdated   : Moment
+  delegatedFrom : Option Actor    -- For SI: who delegated authority
 
--- A goal is something the user might be trying to achieve
+-- A goal is something an actor might be trying to achieve
 structure Goal where
   description  : GoalDescriptor
   deadline     : Option Deadline
   importance   : Importance
   dependencies : List ResourceNeed
+  owner        : Actor            -- Which actor owns this goal
 
--- Intent inference via Bayesian update
+-- Intent inference via Bayesian update (same math, per-actor)
 def updateIntent (current : IntentModel) (signal : Signal) : IntentModel :=
   let newProbs := fun goal =>
     let prior := current.probabilities goal
@@ -1365,6 +1442,13 @@ def updateIntent (current : IntentModel) (signal : Signal) : IntentModel :=
     probabilities := newProbs
     lastUpdated := now
     confidence := computeConfidence newProbs }
+
+-- SI goals are bounded by delegating principal's authority
+theorem si_goals_bounded (si human : Actor) (siIntent : IntentModel) :
+    si.actorType = .synthetic →
+    siIntent.delegatedFrom = some human →
+    ∀ goal ∈ siIntent.goals,
+      goal.importance ≤ maxImportanceFor human (s.actorIntents human)
 ```
 
 ### User Presence Model
@@ -2831,26 +2915,52 @@ THEOREM LivenessProperties == Spec => (EmotiveResponsive /\ NoDeadlock /\
 
 ## User Primacy Invariant
 
-### The Supreme Invariant
+### The Supreme Invariant (Tripartite Actor Model)
 
-The deepest invariant of AETHEROS:
+The deepest invariant of AETHEROS, respecting the tripartite actor model (Human, System, SI):
 
 ```lean
 -- Bounded propagation latency for priority updates
--- This is the maximum time between Emotive priority change and kernel awareness
 constant PRIORITY_PROPAGATION_BOUND : Duration := 10.ms  -- Configurable per deployment
 
--- Every system decision either serves the user's most-recently-propagated priority
--- or is explicitly overridden by governance for policy reasons
--- Note: "recently" is bounded by PRIORITY_PROPAGATION_BOUND
-theorem user_primacy (s s' : SystemState) (d : SystemDecision) :
-    -- If a decision is made by Cognitive or Physical...
-    (MadeBy d s'.cognitive ∨ MadeBy d s'.physical) →
+-- The supreme invariant: Human authority is paramount
+-- Every decision either serves an authorized actor's intent OR is policy-justified
+theorem user_primacy (s s' : SystemState) (d : SystemDecision) (actor : Actor) :
+    -- If a decision is made by Cognitive or Physical for an actor...
+    (MadeBy d s'.cognitive actor ∨ MadeBy d s'.physical actor) →
     -- ...and sufficient time has passed for priority propagation...
     (s'.timestamp - s.emotive.lastPriorityUpdate ≥ PRIORITY_PROPAGATION_BOUND) →
-    -- ...then the decision is consistent with the propagated priority OR overridden
-      ConsistentWith d s'.lastPropagatedPriority ∨
+    -- ...then EITHER:
+      -- 1. Decision serves an authorized actor's propagated priority
+      (ConsistentWith d (s'.lastPropagatedPriority actor) ∧
+       actor.authorityLevel > 0) ∨
+      -- 2. Decision is explicitly overridden by governance
       OverriddenBy d s'.governance
+
+-- Human authority is supreme: no actor can override Human intent
+theorem human_supremacy (s : SystemState) (human si : Actor) :
+    human.actorType = .human →
+    si.actorType ≠ .human →
+    -- SI/System cannot suppress or override Human goals
+    ∀ goal ∈ (s.emotive.actorIntents human).goals,
+      ¬ SuppressedBy goal si s
+
+-- SI authority is bounded by delegating principal
+theorem si_authority_delegation (s : SystemState) (si human : Actor) :
+    si.actorType = .synthetic →
+    si.delegation = some .forHuman →
+    (s.emotive.actorIntents si).delegatedFrom = some human →
+    -- SI cannot exceed delegator's authority
+    ∀ d : SystemDecision,
+      AuthorityRequired d ≤ human.authorityLevel
+
+-- System actor authority is bounded by governance
+theorem system_authority_governance (s : SystemState) (sys : Actor) :
+    sys.actorType = .system →
+    -- System actions must be authorized by governance policy
+    ∀ d : SystemDecision,
+      MadeBy d s.cognitive sys ∨ MadeBy d s.physical sys →
+      AuthorizedByGovernance d s.governance
 
 -- Eventual consistency: priority changes reach all kernels within bounded time
 theorem priority_convergence (s : SystemState) (p : CanonicalPriority) :
@@ -2859,25 +2969,40 @@ theorem priority_convergence (s : SystemState) (p : CanonicalPriority) :
       CognitiveAwareOf s p ∧ PhysicalAwareOf s p
     )
 
--- The propagated priority matches the source (no corruption in transit)
+-- Priority integrity: propagated priority matches source (no corruption)
 theorem priority_integrity (s : SystemState) :
     ∀ k : Kernel, k ≠ .emotive →
       k.lastReceivedPriority = s.emotive.lastSentPriority
+
+-- Actor priority ordering: Human intent always takes precedence
+theorem priority_ordering (s : SystemState) :
+    ∀ h si sys : Actor,
+      h.actorType = .human →
+      si.actorType = .synthetic →
+      sys.actorType = .system →
+      priorityWeight h s > priorityWeight si s ∧
+      priorityWeight si s > priorityWeight sys s
 ```
 
-**Key insight**: In an async IPC system, instantaneous global consistency is impossible (see: CAP theorem). AETHEROS chooses *availability with bounded staleness* over blocking synchronization. The bound is tight enough for human perception (10ms default < 100ms human reaction time).
+**Key insight**: In an async IPC system with multiple actor types, the tripartite model ensures:
+1. **Human supremacy** — Human goals cannot be overridden by SI or System
+2. **Delegated authority** — SI authority is bounded by its delegating principal
+3. **Governance accountability** — System actions are policy-justified
+4. **Bounded staleness** — Priority propagation is time-bounded (10ms default)
 
-In plain language: *Nothing happens in this system that isn't either serving the user's recently-expressed priority or explicitly justified by policy. "Recently" has a provable upper bound.*
+In plain language: *Nothing happens that isn't serving an authorized actor's intent or explicitly justified by policy. Human intent is paramount. SI works for its delegator. System works for governance.*
 
 ### Implications
 
 | Principle | Implementation |
 |---|---|
-| *No hidden computation* | All background work is budgeted and accountable |
+| *Human supremacy* | Human goals always take priority over SI/System goals |
+| *Delegated authority* | SI capabilities bounded by delegating principal |
+| *No hidden computation* | All background work is budgeted and accountable per actor |
 | *No surprise latency* | Emotive kernel sets latency expectations; violations are reported |
-| *No silent failures* | All faults surface to user-visible experience metrics |
-| *No unauthorized resource use* | Governance budgets bound all kernel resource consumption |
-| *No forgotten requests* | Intent model tracks all user goals until completion or explicit abandonment |
+| *No silent failures* | All faults surface to actor-visible experience metrics |
+| *No unauthorized resource use* | Governance budgets bound all actor resource consumption |
+| *No forgotten requests* | Intent model tracks all actor goals until completion or abandonment |
 | *Bounded staleness* | Priority propagation completes within PRIORITY_PROPAGATION_BOUND |
 
 
