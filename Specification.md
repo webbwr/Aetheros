@@ -1,7 +1,5 @@
 # AETHEROS: Architecture and Design Intent Specification
 
-[abstract]
---
 This document defines the architecture and design intent for AETHEROS, a quadripartite microkernel operating system designed from first principles for modern heterogeneous computing platforms. The system prioritizes user experience, mathematical consistency, and conceptual simplicity while embracing structural complexity. All design decisions are guided by the Japanese aesthetic principle of MA (間)—meaningful negative space—ensuring every abstraction earns its existence.
 
 *Target platform:* AMD Ryzen Threadripper PRO 9000 WX-Series with integrated GPU (RDNA) and NPU (XDNA).
@@ -11,9 +9,7 @@ This document defines the architecture and design intent for AETHEROS, a quadrip
 *Primary language:* Rust, with strategic use of C/C++ for AMD ecosystem integration and assembly for hardware primitives.
 
 This specification covers: foundational primitives, capability model, four-kernel architecture (Governance, Physical, Emotive, Cognitive), key innovations (capabilities, dataflow, memory domains, typed channels), inter-kernel communication, RAM-resident execution, formal specification approach, language assessment, heterogeneous compute constraints, GPU/NPU DSL design, AI-assisted development model, critical risks, and bootstrap strategy.
---
 
-<<<
 
 ## Philosophical Foundations
 
@@ -39,10 +35,9 @@ AETHEROS rejects these assumptions. It is a fresh start.
 
 The system is defined as much by what it _excludes_ as what it includes. Every system call, every abstraction, every capability exists because its absence would create a hole. Nothing ornamental. Nothing vestigial.
 
-[quote, Lao Tzu]
-____
-We shape clay into a pot, but it is the emptiness inside that holds whatever we want.
-____
+> We shape clay into a pot, but it is the emptiness inside that holds whatever we want.
+> — *Lao Tzu*
+
 
 #### Mathematical Consistency
 
@@ -60,7 +55,6 @@ The system always knows what it is. No hidden state. No spooky action at a dista
 
 The human is not a "user" in the peripheral sense. The human is the _purpose_. Every computational act serves human intention or is explicitly justified by policy. The system is the user's advocate.
 
-<<<
 
 ## Architectural Overview
 
@@ -68,7 +62,6 @@ The human is not a "user" in the peripheral sense. The human is the _purpose_. E
 
 AETHEROS employs four specialized kernels, each with distinct ontological status:
 
-[source]
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
@@ -175,7 +168,6 @@ AETHEROS introduces four fundamental innovations that distinguish it from all ex
 
 Every resource reference is an unforgeable token encoding _what you can do_. No ambient authority. No access control lists consulted at runtime. This is how seL4 works—and it is the only security model that composes cleanly.
 
-[source]
 ```
 Traditional Model:
     Process → "Can I access /dev/gpu0?" → Kernel checks ACL → Yes/No
@@ -189,7 +181,6 @@ AETHEROS Model:
 
 Instead of "spawn thread, manage synchronization," computation is expressed as graphs:
 
-[source]
 ```
 [Sensor Input] → [Preprocess:NPU] → [Inference:GPU] → [Decision:CPU] → [Output]
 ```
@@ -228,7 +219,6 @@ session GPUJob where
 
 The complete AETHEROS architecture forms four distinct layers:
 
-[source]
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                      User Space                                │
@@ -252,7 +242,6 @@ The complete AETHEROS architecture forms four distinct layers:
 └────────────────────────────────────────────────────────────────┘
 ```
 
-<<<
 
 ## Foundational Primitives
 
@@ -273,33 +262,22 @@ Everything else—processes, threads, files, memory, devices—is _derivable_ fr
 ### Core Equations
 
 [stem]
-++++
 \text{System} := (\text{Domains}, \text{Channels}, \text{Capabilities}, \text{State}, \text{Transitions})
-++++
 
 [stem]
-++++
 \text{State} := \prod_{d : \text{Domain}} \text{DomainState}(d)
-++++
 
 [stem]
-++++
 \text{Transition} : \text{State} \times \text{Event} \to \text{State}
-++++
 
 [stem]
-++++
 \text{Capability} := (\text{Resource}, \text{Rights}, \text{Provenance})
-++++
 
 The invariant preservation property:
 
 [stem]
-++++
 \forall\, t : \text{Transition},\, \forall\, \text{inv} : \text{Invariant} \implies \text{inv}(\text{state}) \Rightarrow \text{inv}(t(\text{state}, \text{event}))
-++++
 
-<<<
 
 ## Boot Sequence Specification
 
@@ -450,7 +428,7 @@ pub fn physical_init(caps: PhysicalCapabilities) -> PhysicalState {
 **Hardware Enumeration Details:**
 
 | Component | Discovery Method | Initialization |
-|-----------|------------------|----------------|
+|``````---|````````````--|````````````|
 | CPU Cores | ACPI MADT | Per-core APIC setup |
 | NUMA Nodes | ACPI SRAT | Memory domain creation |
 | PCIe Devices | ECAM enumeration | Capability assignment |
@@ -572,7 +550,7 @@ theorem no_premature_capabilities :
 ### Boot Timing Summary
 
 | Phase | Duration | Cumulative | Kernel Initialized |
-|-------|----------|------------|-------------------|
+|```---|``````--|`````````|````````````---|
 | 0 | < 100ms | 100ms | (Hardware) |
 | 1 | < 50ms | 150ms | Governance |
 | 2 | < 500ms | 650ms | Physical |
@@ -611,7 +589,6 @@ pub fn recovery_boot(checkpoint: Checkpoint) -> SystemState {
 
 **Recovery Time:** < 2 seconds from valid checkpoint.
 
-<<<
 
 ## Capability Model
 
@@ -715,7 +692,6 @@ theorem revocation_propagation (c : Capability) (s s' : SystemState) :
         ¬ Valid c' s'
 ```
 
-<<<
 
 ## Governance Kernel Specification
 
@@ -774,7 +750,6 @@ AuditCompleteness ==
 | `arbitrate` | Resolve inter-kernel conflict | Governance only |
 | `queryAudit` | Read audit log entries | Any kernel (filtered by capability) |
 
-<<<
 
 ## Physical Kernel Specification
 
@@ -797,20 +772,20 @@ structure PhysicalState where
   memoryDomains     : List MemoryDomain
   pageTableRoots    : Domain → PageTableRoot
   dmaBuffers        : List DMABuffer
-  
+
   -- Device management
   deviceStates      : DeviceId → DeviceState
   interruptState    : InterruptController
   pendingInterrupts : Queue Interrupt
-  
+
   -- Timing
   systemTime        : Timestamp
   timerQueues       : List TimerEntry
-  
+
   -- Heterogeneous compute
   gpuState          : GPUState
   npuState          : NPUState
-  
+
   -- Health metrics (reported to Emotive)
   resourceMetrics   : ResourceId → Metrics
 ```
@@ -838,7 +813,6 @@ structure MemoryDomain where
 
 ### Hardware Mapping
 
-[source]
 ```
 Threadripper PRO 9995WX Physical Layout:
 
@@ -952,7 +926,7 @@ def handlerBudget : InterruptClass → Duration
 x86-64 Interrupt Vector Layout:
 
 Vector Range    | Class           | Assignment
-----------------|-----------------|----------------------------------
+````````````|````````````-|````````````````````````--
 0x00 - 0x1F     | exception       | CPU exceptions (fixed by hardware)
 0x20 - 0x2F     | reserved        | Legacy PIC (unused, masked)
 0x30            | timer           | Local APIC timer
@@ -1150,9 +1124,8 @@ def recordLatency (class : InterruptClass) (latency : Duration) : IO Unit := do
 
 ```lean
 -- Preemption matrix: row can preempt column
---
 --             | Governance | Physical | Emotive | Cognitive | App |
--- ------------|------------|----------|---------|-----------|-----|
+-- `````````|`````````|``````--|``````-|``````---|```-|
 -- NMI         |     ✓      |    ✓     |    ✓    |     ✓     |  ✓  |
 -- Exception   |     ✗      |    ✓     |    ✓    |     ✓     |  ✓  |
 -- Timer       |     ✗      |    ✗     |    ✓    |     ✓     |  ✓  |
@@ -1223,7 +1196,6 @@ def rebalanceInterrupts (metrics : LatencyMetrics) : IO Unit := do
     | _ => pure ()
 ```
 
-<<<
 
 ## Emotive Kernel Specification
 
@@ -1243,10 +1215,8 @@ This is the only kernel that reasons about _subjective experience_.
 
 The Emotive kernel continuously answers:
 
-[quote]
-____
-"Is this system serving this human well, right now?"
-____
+> "Is this system serving this human well, right now?"
+
 
 ### State Structure
 
@@ -1254,19 +1224,19 @@ ____
 structure EmotiveState where
   -- Temporal awareness
   currentMoment     : Moment
-  
+
   -- User modeling
   intentModel       : IntentModel
   userPresence      : PresenceState
   userProfile       : UserProfile
-  
+
   -- Experience tracking
   experienceHistory : RingBuffer (Moment × ExperienceQuality)
   currentExperience : ExperienceQuality
-  
+
   -- System health (from user's perspective)
   healthSnapshot    : SystemHealth
-  
+
   -- Output
   currentPriority   : Priority
 ```
@@ -1295,7 +1265,7 @@ def updateIntent (current : IntentModel) (signal : Signal) : IntentModel :=
     let likelihood := signalLikelihood signal goal
     let evidence := Σ g, current.probabilities g * signalLikelihood signal g
     (prior * likelihood) / evidence  -- Bayes' rule
-  { current with 
+  { current with
     probabilities := newProbs
     lastUpdated := now
     confidence := computeConfidence newProbs }
@@ -1332,23 +1302,23 @@ structure ExperienceQuality where
   overall        : Ratio  -- weighted combination
 
 -- Quality computation varies by presence
-def computeOverallExperience (eq : ExperienceQuality) 
+def computeOverallExperience (eq : ExperienceQuality)
                               (presence : PresenceState) : Ratio :=
   match presence with
-  | .activeFocus _ _ => 
-      0.50 * eq.responsiveness + 
-      0.20 * eq.accuracy + 
-      0.20 * eq.coherence + 
+  | .activeFocus _ _ =>
+      0.50 * eq.responsiveness +
+      0.20 * eq.accuracy +
+      0.20 * eq.coherence +
       0.10 * eq.aesthetics
-  | .passiveAttention _ => 
-      0.30 * eq.responsiveness + 
-      0.30 * eq.accuracy + 
-      0.20 * eq.coherence + 
+  | .passiveAttention _ =>
+      0.30 * eq.responsiveness +
+      0.30 * eq.accuracy +
+      0.20 * eq.coherence +
       0.20 * eq.aesthetics
-  | _ => 
-      0.20 * eq.responsiveness + 
-      0.40 * eq.accuracy + 
-      0.30 * eq.coherence + 
+  | _ =>
+      0.20 * eq.responsiveness +
+      0.40 * eq.accuracy +
+      0.30 * eq.coherence +
       0.10 * eq.aesthetics
 ```
 
@@ -1378,7 +1348,6 @@ structure PhysicalDirective where
 
 ### Input Signal Sources
 
-[source]
 ```
 Intent Signal Sources:
 
@@ -1652,7 +1621,6 @@ def shouldBurstUpdate (signal : Signal) : Bool :=
   | _ => false
 ```
 
-<<<
 
 ## Cognitive Kernel Specification
 
@@ -1673,16 +1641,16 @@ structure CognitiveState where
   -- Active computation
   activeComputations : List ComputeGraph
   pendingDecisions   : Queue Decision
-  
+
   -- Resource tracking
   gpuWorkQueue       : Queue GPUWork
   npuWorkQueue       : Queue NPUWork
   cpuTaskQueue       : PriorityQueue Task
-  
+
   -- Models and caches
   worldModel         : WorldModel
   planCache          : PlanId → Plan
-  
+
   -- Optimization state
   schedulerState     : SchedulerState
   placementPolicy    : PlacementPolicy
@@ -2080,7 +2048,6 @@ def exportSchedulerMetrics : IO Unit := do
 | `adjustPriority` | Modify task priority | Cognitive (guided by Emotive) |
 | `reportCompletion` | Signal computation finished | Cognitive → Emotive |
 
-<<<
 
 ## Inter-Kernel Communication
 
@@ -2088,7 +2055,6 @@ def exportSchedulerMetrics : IO Unit := do
 
 Kernels communicate via typed, capability-protected channels. There is *no shared mutable state* between kernels.
 
-[source]
 ```
 Inter-Kernel Channel Topology:
 
@@ -2175,7 +2141,6 @@ GovernanceIntervention ==
         □◇ (CanReceiveFrom(k, governance))
 ```
 
-<<<
 
 ## RAM-Resident Execution Model
 
@@ -2223,7 +2188,7 @@ structure Checkpoint where
 
 ```lean
 -- Recovery reconstructs system from checkpoint + journal
-def recover (checkpoint : Checkpoint) 
+def recover (checkpoint : Checkpoint)
             (journal : List JournalEntry) : SystemState :=
   let base := reconstructFromCheckpoint checkpoint
   let final := journal.foldl applyJournalEntry base
@@ -2236,7 +2201,6 @@ theorem recovery_totality (c : Checkpoint) (j : List JournalEntry) :
       ∃ s : SystemState, recover c j = s ∧ Consistent s
 ```
 
-<<<
 
 ## Formal Specification Languages
 
@@ -2253,7 +2217,7 @@ AETHEROS uses a layered formal approach:
 ### TLA+ Module Structure
 
 ```tla
---------------------------- MODULE AetherosComplete ---------------------------
+``````````````````--- MODULE AetherosComplete ``````````````````---
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
 CONSTANTS
@@ -2271,9 +2235,9 @@ vars == <<physicalState, emotiveState, cognitiveState, governanceState,
 Kernels == {"governance", "physical", "emotive", "cognitive"}
 KernelPairs == Kernels \X Kernels
 
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 \* COMPLETE STATE SPACE (bounded for model checking)
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 
 PhysicalStateSpace ==
     [memory: [1..MaxDomains -> {"free", "allocated", "mapped"}],
@@ -2303,9 +2267,9 @@ TypeOK ==
     /\ \A <<k1, k2>> \in KernelPairs : Len(channels[<<k1, k2>>]) <= MaxMessages
     /\ \A k \in Kernels : capabilities[k] \subseteq 1..MaxCapabilities
 
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 \* COMPLETE SAFETY INVARIANTS
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 
 \* Safety: No capability forgery - capabilities only from governance or delegation
 NoForgery ==
@@ -2345,9 +2309,9 @@ NoPriorityInversion ==
         emotiveState.priorities[d1] > emotiveState.priorities[d2] =>
             ~(Waiting(d1) /\ Running(d2) /\ Blocks(d2, d1))
 
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 \* COMPLETE LIVENESS PROPERTIES
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 
 \* Liveness: Emotive responsiveness - user signals lead to priority updates
 EmotiveResponsive ==
@@ -2375,9 +2339,9 @@ PolicyPropagation ==
         (governanceState.policyEpoch = epoch) ~>
             (\A k \in Kernels : PolicyApplied(k, epoch))
 
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 \* STATE TRANSITIONS
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 
 \* Physical kernel: Timer tick
 TimerTick ==
@@ -2450,9 +2414,9 @@ Fairness ==
 \* Complete specification
 Spec == Init /\ [][Next]_vars /\ Fairness
 
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 \* MODEL CHECKING CONFIGURATION
---------------------------------------------------------------------------------
+````````````````````````````````````````````````````````````
 
 \* Run with: TLC -deadlock -workers 8 AetherosComplete.tla
 
@@ -2521,7 +2485,6 @@ THEOREM LivenessProperties == Spec => (EmotiveResponsive /\ NoDeadlock /\
 -- AETHEROS.System: Composed system and invariants
 ```
 
-<<<
 
 ## User Primacy Invariant
 
@@ -2551,7 +2514,6 @@ In plain language: *Nothing happens in this system that isn't either serving the
 | *No unauthorized resource use* | Governance budgets bound all kernel resource consumption |
 | *No forgotten requests* | Intent model tracks all user goals until completion or explicit abandonment |
 
-<<<
 
 ## System Call Interface
 
@@ -2865,7 +2827,6 @@ struct SyscallAudit {
 }
 ```
 
-<<<
 
 ## Implementation Language
 
@@ -2917,7 +2878,6 @@ impl<R: Resource, const RIGHTS: Rights> Capability<R, RIGHTS> {
 }
 ```
 
-<<<
 
 ## Language Assessment: Detailed Analysis
 
@@ -2980,7 +2940,6 @@ Genuinely worth considering:
 
 Given soft real-time requirements and the priority on safety and modern design:
 
-[source]
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Timing-Critical Core (if hard real-time needed)               │
@@ -3002,7 +2961,6 @@ Given soft real-time requirements and the priority on safety and modern design:
 
 For AETHEROS specifically—soft real-time, user-focused, greenfield—*Rust is the primary choice* with strategic use of C/C++ for AMD ecosystem integration.
 
-<<<
 
 ## The Heterogeneous Compute Problem
 
@@ -3040,7 +2998,6 @@ AMD's XDNA architecture is more predictable than the GPU:
 
 The Emotive kernel may leverage NPU for pattern recognition (user intent inference) with tighter timing bounds than GPU-based approaches.
 
-<<<
 
 ## The GPU/NPU Language Problem
 
@@ -3058,7 +3015,6 @@ The Emotive kernel may leverage NPU for pattern recognition (user intent inferen
 
 Inspired by Halide's key insight: *separate what to compute from how to compute it*.
 
-[source]
 ```
 Traditional Approach:
 ┌─────────────────────────────────────────┐
@@ -3124,7 +3080,6 @@ The DSL described above does not fully exist. Components exist:
 
 AETHEROS may need to synthesize these ideas into a coherent, Rust-integrated DSL. This is potentially the project's most novel contribution.
 
-<<<
 
 ## Security Threat Model
 
@@ -3337,7 +3292,6 @@ theorem memory_isolation :
 | *Red Team Exercise* | Full system, including social engineering | Annually |
 | *Bug Bounty* | All components | Continuous |
 
-<<<
 
 ## Critical Risks and Mitigations
 
@@ -3355,10 +3309,8 @@ theorem memory_isolation :
 
 ### The Honest Assessment
 
-[quote]
-____
-This is a decade-scale undertaking for a well-resourced team, or a lifetime project for a smaller effort.
-____
+> This is a decade-scale undertaking for a well-resourced team, or a lifetime project for a smaller effort.
+
 
 | Scenario | Timeline |
 |---|---|
@@ -3369,7 +3321,6 @@ ____
 
 The path chosen should match available resources. A focused prototype demonstrating the quadripartite model and capability system has value even if full production is not achieved.
 
-<<<
 
 ## Bootstrap Strategy
 
@@ -3388,7 +3339,6 @@ The path chosen should match available resources. A focused prototype demonstrat
 
 ### Prototype-First Philosophy
 
-[source]
 ```
                     ┌─────────────────────────┐
                     │  Production AETHEROS    │
@@ -3443,7 +3393,6 @@ Each component can be prototyped on Linux, validated, and refined _before_ the m
 - Application ecosystem developing
 - Community growth
 
-<<<
 
 ## AI-Assisted Development Model
 
@@ -3478,7 +3427,6 @@ AETHEROS development can leverage AI assistance through Claude Code as a collabo
 
 ### The Collaboration Topology
 
-[source]
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        HUMAN                                │
@@ -3508,10 +3456,8 @@ AETHEROS development can leverage AI assistance through Claude Code as a collabo
 
 ### Critical Understanding
 
-[quote]
-____
-Claude Code can _write_ TLA+ specs, _generate_ Lean proofs, _produce_ Rust implementations. But the proof assistant is the authority, not Claude's assertion.
-____
+> Claude Code can _write_ TLA+ specs, _generate_ Lean proofs, _produce_ Rust implementations. But the proof assistant is the authority, not Claude's assertion.
+
 
 Claude Code has never built a production OS. Neither has any other LLM. This means:
 
@@ -3549,7 +3495,6 @@ With Claude Code as a capable assistant, development effort may compress:
 
 Total project timeline compression: perhaps *30-40%*—meaningful but not an order of magnitude.
 
-<<<
 
 ## Existing Work to Study
 
@@ -3568,14 +3513,14 @@ Total project timeline compression: perhaps *30-40%*—meaningful but not an ord
 
 ### Foundational Research
 
-| Area | Key Works |
-|---|---|
-| *Capability Systems* | Dennis & Van Horn (1966), EROS, seL4 proofs |
-| *Microkernel Design* | L4 family, Mach critique, seL4 |
-| *Formal Verification* | CompCert, seL4, CertiKOS |
-| *Dataflow Execution* | Dataflow architectures, Legion, TensorFlow graphs |
-| *Session Types* | Honda (1993), Gay & Hole, Rust session types |
-| *Linear Types* | Girard, Wadler, Rust ownership |
+| Area | Key Works | Seminal Papers |
+|---|---|---|
+| *Capability Systems* | Dennis & Van Horn (1966), EROS, seL4 proofs | Shapiro, "EROS: A Fast Capability System" |
+| *Microkernel Design* | L4 family, Mach critique, seL4 | Klein et al., "seL4: Formal Verification of an OS Kernel" |
+| *Formal Verification* | CompCert, seL4, CertiKOS | Lamport, "The Temporal Logic of Actions" |
+| *Dataflow Execution* | Dataflow architectures, Legion, TensorFlow graphs | — |
+| *Session Types* | Honda (1993), Gay & Hole, Rust session types | Honda, "Session Types for Object-Oriented Languages"; Gay & Hole, "Subtyping for Session Types" |
+| *Linear Types* | Girard, Wadler, Rust ownership | Wadler, "Linear Types Can Change the World" |
 
 ### What to Absorb vs. What to Invent
 
@@ -3586,7 +3531,6 @@ Total project timeline compression: perhaps *30-40%*—meaningful but not an ord
 | Memory safety (Rust) | GPU integration (ROCm → native) | Algorithm/schedule DSL for heterogeneous compute |
 | Formal methods (TLA+, Lean) | Persistence model (checkpoint-based) | Experience quality computation |
 
-<<<
 
 ## Development Phases
 
@@ -3607,8 +3551,7 @@ The MVK represents the smallest complete system that demonstrates the quadripart
 
 *Milestones with Exit Criteria:*
 
-[source]
-----
+```
 Milestone 1.1: Lean 4 Capability Algebra
 ├── Deliverables:
 │   ├── Complete capability type definitions
@@ -3641,14 +3584,13 @@ Milestone 1.3: Rust Capability Crate
 │   ├── Zero unsafe blocks (or audited justification)
 │   └── Lean-to-Rust extraction validated
 └── Gate: Implementation matches specification
-----
+```
 
 ### Phase 2: Microkernel Core (Months 7-18)
 
 *Milestones with Exit Criteria:*
 
-[source]
-----
+```
 Milestone 2.1: Governance + Physical Boot
 ├── Deliverables:
 │   ├── Minimal bootloader (UEFI)
@@ -3682,14 +3624,13 @@ Milestone 2.3: Memory Management
 │   ├── No cross-domain memory access possible
 │   └── Memory exhaustion handled gracefully
 └── Gate: Memory isolation validated
-----
+```
 
 ### Phase 3: Emotive/Cognitive Integration (Months 19-30)
 
 *Milestones with Exit Criteria:*
 
-[source]
-----
+```
 Milestone 3.1: Emotive Kernel (Explicit Mode)
 ├── Deliverables:
 │   ├── Priority profile management
@@ -3722,14 +3663,13 @@ Milestone 3.3: Four-Kernel Communication
 │   ├── All protocol state machines verified
 │   └── Stress test: 24h continuous operation
 └── Gate: Quadripartite model validated
-----
+```
 
 ### Phase 4: Hardware Integration (Months 31-48+)
 
 *Milestones with Exit Criteria:*
 
-[source]
-----
+```
 Milestone 4.1: Bare Metal Boot
 ├── Deliverables:
 │   ├── Native boot on AMD Threadripper PRO
@@ -3762,7 +3702,7 @@ Milestone 4.3: Production Performance
 │   ├── Context switch < 1μs
 │   └── Memory bandwidth > 90% of theoretical
 └── Gate: Production-ready assessment
-----
+```
 
 ### Resource Requirements
 
@@ -3784,7 +3724,6 @@ Milestone 4.3: Production Performance
 | Performance not competitive | Continuous benchmarking; optimization sprints | Target specialized workloads (not general-purpose) |
 | Team scaling challenges | Clear interfaces; modular kernel design | Extend timeline rather than compromise quality |
 
-<<<
 
 ## Complete System Walkthrough
 
@@ -3933,7 +3872,6 @@ SUMMARY
 
 This walkthrough demonstrates that AETHEROS is not merely a collection of abstractions—it is a functioning system where every component has a concrete role in serving user intent.
 
-<<<
 
 ## Appendix A: Glossary
 
@@ -3953,34 +3891,8 @@ This walkthrough demonstrates that AETHEROS is not merely a collection of abstra
 | *Session Type* | Type encoding valid sequences of channel operations |
 | *Transition* | Function mapping current state + event to new state |
 
-<<<
 
-## Appendix B: Reference Materials
-
-### Systems to Study
-
-| System | Key Insight |
-|---|---|
-| *seL4* | Capability model done right; formal verification achieved |
-| *Redox OS* | Rust microkernel; Unix-like but instructive |
-| *Fuchsia/Zircon* | Object-capability model; handles not file descriptors |
-| *Hubris (Oxide)* | Rust RTOS for embedded; principled design |
-| *Theseus* | Rust OS with live evolution; novel state management |
-| *Legion (Stanford)* | Dataflow runtime for heterogeneous compute |
-| *Halide* | Algorithm/schedule separation for compute kernels |
-
-### Foundational Papers
-
-- Shapiro, J. "EROS: A Fast Capability System"
-- Klein, G. et al. "seL4: Formal Verification of an OS Kernel"
-- Lamport, L. "The Temporal Logic of Actions"
-- Honda, K. "Session Types for Object-Oriented Languages"
-- Gay, S. & Hole, M. "Subtyping for Session Types"
-- Wadler, P. "Linear Types Can Change the World"
-
-<<<
-
-## Appendix C: AMD Platform Specifications
+## Appendix B: AMD Platform Specifications
 
 ### Target Hardware: Threadripper PRO 9995WX
 
@@ -4011,9 +3923,8 @@ This walkthrough demonstrates that AETHEROS is not merely a collection of abstra
 | *Programming* | Proprietary SDK; abstracted by Cognitive kernel |
 | *Use Case* | ML inference acceleration; pattern recognition for Emotive kernel |
 
-<<<
 
-## Appendix D: Document History
+## Appendix C: Document History
 
 | Version | Date | Changes |
 |---|---|---|
@@ -4025,9 +3936,8 @@ This walkthrough demonstrates that AETHEROS is not merely a collection of abstra
 
 This document was produced through Socratic dialogue, applying principles of MA to achieve conceptual clarity through careful removal of the inessential.
 
-[quote, Antoine de Saint-Exupéry]
-____
-Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away.
-____
+> Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away.
+> — *Antoine de Saint-Exupéry*
+
 
 // End of specification
