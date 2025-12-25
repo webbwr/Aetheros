@@ -38,6 +38,100 @@ The system is defined as much by what it _excludes_ as what it includes. Every s
 > We shape clay into a pot, but it is the emptiness inside that holds whatever we want.
 > — *Lao Tzu*
 
+**The MA Imperative:**
+
+| Principle | Meaning | Violation Example |
+|-----------|---------|-------------------|
+| **Form follows Function** | Structure exists to serve purpose, never the reverse | UI that forces workflow; API that constrains capability |
+| **Function serves USER** | All functionality ultimately serves Human, SI, or System | Features that serve vendor metrics over user goals |
+| **Transparency by Default** | Nothing hidden; all state observable; all decisions auditable | Hidden telemetry; opaque algorithms; undocumented behavior |
+| **No Lock-In** | User data portable; formats open; dependencies replaceable | Proprietary formats; vendor-specific APIs; closed ecosystems |
+| **No Hidden Agendas** | System acts solely for authorized actors; no dark patterns | Nudges toward vendor benefit; artificial limitations; upselling |
+
+```lean
+-- MA principle: form must serve function, function must serve user
+structure MACompliance where
+  formFollowsFunction    : Bool  -- Structure enables purpose
+  functionServesUser     : Bool  -- Purpose benefits an authorized actor
+  transparentByDefault   : Bool  -- State and decisions are observable
+  noVendorLockIn         : Bool  -- Data portable, formats open
+  noHiddenAgendas        : Bool  -- No dark patterns or hidden motives
+
+-- Every system component must pass MA compliance
+def isMACompliant (c : Component) : Bool :=
+  c.maCompliance.formFollowsFunction ∧
+  c.maCompliance.functionServesUser ∧
+  c.maCompliance.transparentByDefault ∧
+  c.maCompliance.noVendorLockIn ∧
+  c.maCompliance.noHiddenAgendas
+
+-- No component may exist that fails MA compliance
+theorem ma_compliance_required (c : Component) :
+    c ∈ SystemComponents → isMACompliant c
+```
+
+**Function Serves USER (All Three Roles):**
+
+Every function in the system must trace its purpose to serving at least one authorized actor:
+
+| Actor | Service Examples | Anti-Patterns (Forbidden) |
+|-------|-----------------|---------------------------|
+| **Human** | Task completion, information access, experience quality | Ads, nag screens, artificial delays, dark patterns |
+| **System** | Health monitoring, resource optimization, self-healing | Telemetry for vendor, mining user data, silent tracking |
+| **SI** | Goal execution, learning, adaptation | Training on user data without consent, hidden model updates |
+
+```lean
+-- Every function must identify which actor(s) it serves
+structure FunctionPurpose where
+  servesHuman  : Bool    -- Directly benefits Human
+  servesSystem : Bool    -- Maintains platform health
+  servesSI     : Bool    -- Enables SI to serve its principal
+  justification : String -- Why this function exists
+
+-- A function with no purpose is forbidden
+theorem function_must_serve (f : SystemFunction) :
+    f.purpose.servesHuman ∨ f.purpose.servesSystem ∨ f.purpose.servesSI
+
+-- Hidden vendor benefit is forbidden
+axiom no_hidden_vendor_benefit :
+    ∀ f : SystemFunction, ¬ (servesVendor f ∧ ¬ statedInPurpose f)
+```
+
+#### Transparency by Default
+
+Nothing in AETHEROS is hidden from its authorized actors:
+
+| Transparency Domain | What Is Visible | How |
+|---------------------|-----------------|-----|
+| **State** | All system state observable by appropriate actors | State query APIs, debug introspection |
+| **Decisions** | All policy decisions auditable with reasoning | Audit log with decision traces |
+| **Data Flow** | All data movement trackable | Capability-based data lineage |
+| **Dependencies** | All external dependencies explicit | Manifest with versions, sources |
+| **Telemetry** | All telemetry visible and controllable by user | Telemetry dashboard, opt-in only |
+
+```lean
+-- Transparency invariant: every state change has observable justification
+theorem transparency_invariant (s s' : SystemState) (t : Transition) :
+    t s = s' →
+    ∃ j : Justification, observable j ∧ explains j t
+
+-- No dark patterns: every user-facing action has clear purpose
+def isDarkPattern (action : UserAction) : Bool :=
+  action.hiddenConsequences.nonEmpty ∨
+  action.misleadingPresentation ∨
+  action.benefitsVendorOverUser
+
+theorem no_dark_patterns :
+    ∀ action : UserAction, ¬ isDarkPattern action
+
+-- Vendor lock-in elimination: all data formats are open
+axiom data_portability :
+    ∀ d : UserData, ∃ f : OpenFormat, exportable d f
+
+-- No hidden telemetry: all telemetry is auditable
+axiom telemetry_transparency :
+    ∀ t : TelemetryEvent, t ∈ auditLog ∧ userVisible t
+```
 
 #### Mathematical Consistency
 
