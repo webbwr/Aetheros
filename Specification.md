@@ -73,6 +73,7 @@ AETHEROS is a **quadripartite microkernel operating system** designed from first
 | **Dataflow Execution** | Computation as dependency graphs, not threads | Natural parallelism; deterministic scheduling |
 | **Typed Channels** | Session-typed inter-kernel communication | Protocol correctness verified at compile time |
 | **Tripartite Network Channels** | Internal/Private/Public isolation | System actor never receives from public channels |
+| **Production Output Optimization** | Po = (Uh × Usi) / (Oos + Us) | Maximize human-AI value; minimize operational costs (Section 3.5) |
 
 ### 1.3 Target Platform
 
@@ -93,6 +94,8 @@ AETHEROS is a **quadripartite microkernel operating system** designed from first
 | **IPC Latency** | < 1.5 μs (topology-dependent) | Competitive with L4/seL4; see Section 11.4 |
 | **Context Switch** | < 1 μs | Minimal overhead |
 | **End-to-End User Action** | < 16 ms | Soft real-time responsiveness |
+
+> **Po Equation Context**: These targets directly minimize **Oos** (OS operational cost) in the Production Output equation. Sub-microsecond IPC and context switching ensure the denominator `(Oos + Us)` remains minimal, maximizing Po.
 
 ### 1.5 Actor Model
 
@@ -315,11 +318,69 @@ theorem human_authority_supreme :
   | si _ => simp [Actor.hasAuthorityOver]
 ```
 
-### 3.5 Mathematical Consistency
+### 3.5 Production Output Equation
+
+**Core Insight**: System value is maximized when human-AI collaboration is amplified while operational overhead approaches zero.
+
+```
+Po = (Uh × Usi) / (Oos + Us)
+```
+
+| Symbol | Meaning | Description |
+|--------|---------|-------------|
+| **Po** | Production Output | Total system value (∑Sv) — what the system delivers |
+| **Uh** | User Human | Human contribution, intent, creativity, authority |
+| **Usi** | User Synthetic Intelligence | AI/SI contribution, automation, inference, acceleration |
+| **Oos** | OS Operational Cost | Overhead of the operating system itself (latency, memory, complexity) |
+| **Us** | User System Operational Cost | Overhead imposed on the user (friction, learning curve, waiting) |
+
+**The MA Imperative Applied**: The denominator `(Oos + Us)` represents operational friction—the anti-MA. AETHEROS is designed to minimize this denominator toward the limit:
+
+> **(Oos + Us) ≤ 1** for maximum Po
+
+When operational costs approach unity (or below), production output becomes the **direct product** of human and synthetic intelligence working in concert. This is the architectural north star.
+
+```lean
+-- Production Output Equation formalized
+-- REQ-ARCH-001, REQ-PERF-001, REQ-SEC-005
+structure ProductionMetrics where
+  userHuman     : Float       -- Uh: Human contribution factor
+  userSI        : Float       -- Usi: SI contribution factor
+  osOverhead    : Float       -- Oos: OS operational cost
+  userOverhead  : Float       -- Us: User-facing operational cost
+  deriving Repr
+
+def productionOutput (m : ProductionMetrics) : Float :=
+  (m.userHuman * m.userSI) / (m.osOverhead + m.userOverhead)
+
+-- Core optimization constraint: operational costs must trend toward unity
+theorem minimal_overhead_maximizes_output (m : ProductionMetrics) :
+    m.osOverhead + m.userOverhead ≤ 1.0 →
+    productionOutput m ≥ m.userHuman * m.userSI := by
+  intro h_overhead_minimal
+  simp [productionOutput]
+  exact div_ge_self_of_denom_le_one h_overhead_minimal
+
+-- Architectural requirement: every component must justify its overhead
+axiom component_overhead_justified :
+    ∀ c : Component, c.operationalCost ≤ c.valueDelivered
+```
+
+**Architectural Implications**:
+
+| Principle | How AETHEROS Minimizes Overhead |
+|-----------|--------------------------------|
+| **Microkernel** | Minimal privileged code → minimal Oos |
+| **Capability-based** | No ambient authority checks → reduced Us |
+| **Dataflow execution** | Natural parallelism → Uh and Usi multiply efficiently |
+| **Emotive kernel** | Anticipates intent → reduced Us friction |
+| **Zero-copy IPC** | Direct data sharing → minimal Oos |
+
+### 3.6 Mathematical Consistency
 
 The system is an algebraic object: operations compose, invariants hold, state transitions are total functions. No undefined behavior. No "it depends." The specification _is_ the system; implementation merely instantiates it.
 
-### 3.6 Transparency Invariants
+### 3.7 Transparency Invariants
 
 | Transparency Domain | What Is Visible | How |
 |---------------------|-----------------|-----|
@@ -816,6 +877,8 @@ structure InterruptDescriptor where
 
 **Role**: User intent inference, priority computation, experience quality.
 
+> **Po Equation Role**: The Emotive kernel directly minimizes **Us** (user operational cost) by anticipating intent and reducing friction. When the system predicts what users need, waiting time and cognitive load decrease, driving `(Oos + Us) → 1`.
+
 ```lean
 -- REQ-KERN-003: Emotive maintains user intent model
 structure EmotiveState where
@@ -860,6 +923,8 @@ def computePriority (intent : IntentModel) (task : Task) : Priority :=
 ### 7.4 Cognitive Kernel (Logos/理)
 
 **Role**: Computation scheduling, GPU/NPU orchestration, dataflow execution.
+
+> **Po Equation Role**: The Cognitive kernel maximizes the numerator **(Uh × Usi)** by optimally scheduling human-initiated and AI-augmented computation across heterogeneous resources, ensuring synergy rather than contention.
 
 ```lean
 -- REQ-KERN-004: Cognitive schedules all computation
