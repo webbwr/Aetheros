@@ -1,0 +1,28 @@
+# Serena Project Configuration for AETHEROS
+# Quadripartite Microkernel Operating System
+
+project_name: AETHEROS
+
+# Language configuration for semantic analysis
+languages:
+  - name: markdown
+    root_path: .
+  - name: lean4
+    root_path: .
+
+# File patterns to include
+include_patterns:
+  - "**/*.md"
+  - "**/*.lean"
+  - "**/*.lean4"
+
+# File patterns to exclude
+exclude_patterns:
+  - ".git/**"
+  - ".vscode/**"
+  - "node_modules/**"
+
+# Project-specific settings
+settings:
+  max_file_size: 500000  # 500KB for large spec files
+  enable_semantic_search: true
