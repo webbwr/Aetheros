@@ -908,6 +908,169 @@ def defaultPartition : CorePartition := {
 }
 ```
 
+### 7.5 Kernel Boundary Failure Mode Analysis
+
+**Design Philosophy:** Every cross-kernel boundary is a failure surface. All failure modes must be enumerated, detected, and handled explicitly.
+
+#### 7.5.1 Failure Mode Taxonomy
+
+```lean
+-- REQ-FAIL-001: All failures at kernel boundaries are typed
+inductive KernelBoundaryFailure where
+  -- Communication failures
+  | channelTimeout   : Duration → KernelBoundaryFailure
+  | channelClosed    : ChannelId → KernelBoundaryFailure
+  | messageTooLarge  : Size → Size → KernelBoundaryFailure  -- actual, max
+  | protocolViolation: SessionTypeError → KernelBoundaryFailure
+
+  -- Resource failures
+  | memoryExhausted  : MemoryDomain → KernelBoundaryFailure
+  | capabilityRevoked: CapabilityId → KernelBoundaryFailure
+  | quotaExceeded    : ResourceClass → KernelBoundaryFailure
+
+  -- Hardware failures
+  | deviceError      : DeviceId → DeviceError → KernelBoundaryFailure
+  | dmaTimeout       : DmaHandle → KernelBoundaryFailure
+  | uncorrectableECC : PhysAddr → KernelBoundaryFailure
+
+  -- Integrity failures
+  | authenticationFailed : ActorId → KernelBoundaryFailure
+  | capabilityForged     : CapabilityId → KernelBoundaryFailure  -- Critical!
+  | invariantViolation   : InvariantId → KernelBoundaryFailure   -- Critical!
+```
+
+#### 7.5.2 Cross-Kernel Message Failure Modes
+
+| Source | Target | Failure Mode | Detection | Recovery |
+|--------|--------|--------------|-----------|----------|
+| Emotive | Cognitive | Intent update timeout | Watchdog timer | Stale intent, default priority |
+| Emotive | Governance | Priority conflict | Arbitration response | Policy-based resolution |
+| Cognitive | Physical | Compute schedule rejected | Immediate error | Requeue with backoff |
+| Cognitive | Physical | DMA transfer timeout | Hardware timeout | Buffer release, retry |
+| Physical | Governance | Capability request denied | Synchronous response | Propagate to caller |
+| Physical | Cognitive | Resource exhaustion | Allocation failure | Pressure notification |
+| Governance | All | Policy update failure | Transaction abort | Rollback, alarm |
+
+#### 7.5.3 Failure Detection Mechanisms
+
+```rust
+/// Watchdog timer for cross-kernel operations
+pub struct KernelWatchdog {
+    operation: OperationId,
+    deadline: Instant,
+    severity: FailureSeverity,
+    escalation_chain: Vec<EscalationAction>,
+}
+
+/// Failure severity classification
+pub enum FailureSeverity {
+    /// Transient - retry with backoff
+    Transient { max_retries: u32, backoff_ms: u32 },
+    /// Degraded - continue with reduced functionality
+    Degraded { fallback: FallbackStrategy },
+    /// Critical - immediate escalation required
+    Critical { alarm: AlarmId },
+    /// Fatal - kernel must halt this subsystem
+    Fatal { panic_message: &'static str },
+}
+
+impl KernelWatchdog {
+    pub fn on_timeout(&self) -> FailureAction {
+        match self.severity {
+            FailureSeverity::Transient { max_retries, .. } if self.retries < max_retries => {
+                FailureAction::Retry { delay: self.exponential_backoff() }
+            }
+            FailureSeverity::Degraded { fallback } => {
+                FailureAction::Fallback(fallback)
+            }
+            FailureSeverity::Critical { alarm } => {
+                FailureAction::Escalate { alarm, notify_governance: true }
+            }
+            FailureSeverity::Fatal { panic_message } => {
+                FailureAction::Halt { message: panic_message }
+            }
+            _ => FailureAction::Propagate
+        }
+    }
+}
+```
+
+#### 7.5.4 Invariant Violation Response Matrix
+
+| Invariant | Detection Point | Immediate Action | Root Cause Protocol |
+|-----------|-----------------|------------------|---------------------|
+| **NoForgery** | Capability validation | Terminate actor, revoke tree | Security audit, memory dump |
+| **NoAmplification** | Derivation check | Reject operation | Log attempt, alert |
+| **RevocationPropagates** | Epoch check | Force invalidation | Consistency repair |
+| **UserPrimacy** | Governance check | Halt non-compliant op | Policy review |
+| **AuditComplete** | Transaction commit | Block until logged | Journal recovery |
+
+#### 7.5.5 Graceful Degradation States
+
+```lean
+-- Degradation levels for each kernel
+inductive DegradationLevel where
+  | nominal       : DegradationLevel  -- Full functionality
+  | constrained   : DegradationLevel  -- Reduced resources
+  | minimal       : DegradationLevel  -- Essential only
+  | isolated      : DegradationLevel  -- No cross-kernel ops
+  | halted        : DegradationLevel  -- Awaiting recovery
+
+-- Per-kernel degradation policy
+structure KernelDegradationPolicy where
+  kernel              : KernelId
+  thresholds          : DegradationThresholds
+  allowedTransitions  : List (DegradationLevel × DegradationLevel)
+  recoveryProcedure   : DegradationLevel → RecoveryAction
+
+-- Example: Physical kernel degradation
+def physicalDegradation : KernelDegradationPolicy := {
+  kernel := .physical
+  thresholds := {
+    toConstrained := ResourcePressure.medium
+    toMinimal     := ResourcePressure.high
+    toIsolated    := ResourcePressure.critical
+    toHalted      := ResourcePressure.unrecoverable
+  }
+  allowedTransitions := [
+    (.nominal, .constrained),
+    (.constrained, .minimal),
+    (.constrained, .nominal),      -- Recovery possible
+    (.minimal, .isolated),
+    (.isolated, .halted),
+    (.minimal, .constrained)       -- Recovery possible
+  ]
+  recoveryProcedure := fun level =>
+    match level with
+    | .constrained => .releaseNonessentialMemory
+    | .minimal     => .suspendBatchTasks
+    | .isolated    => .notifyGovernance
+    | _            => .awaitOperator
+}
+```
+
+#### 7.5.6 Failure Propagation Rules
+
+1. **Fail-Fast Principle**: Detect failures at the boundary, not inside the kernel
+2. **Explicit Propagation**: No silent failures; all errors typed and logged
+3. **Bounded Retry**: Maximum 3 retries with exponential backoff (100ms, 200ms, 400ms)
+4. **Isolation Cascade**: If kernel enters `isolated`, notify Governance within 10ms
+5. **Audit Mandatory**: Every failure mode transition is logged to audit trail
+
+```rust
+/// Failure propagation protocol
+pub trait FailurePropagation {
+    /// Report failure to originating actor
+    fn propagate_to_caller(&self, failure: &KernelBoundaryFailure) -> Result<(), PropagationError>;
+
+    /// Notify Governance of critical failure
+    fn escalate_to_governance(&self, failure: &KernelBoundaryFailure, context: &FailureContext);
+
+    /// Log to audit trail (MUST succeed or halt)
+    fn audit_failure(&self, failure: &KernelBoundaryFailure, outcome: FailureOutcome);
+}
+```
+
 ---
 
 ## 8. System Call ABI
@@ -1504,6 +1667,90 @@ AMD's XDNA is more predictable:
 
 The Emotive kernel may leverage NPU for intent inference with tighter timing.
 
+### 14.4 XDNA NPU Memory Coherence Model
+
+The XDNA NPU operates with explicit memory coherence, requiring software-managed synchronization:
+
+```lean
+-- XDNA Memory Domain Model
+inductive XDNAMemoryRegion where
+  | hostPinned    : XDNAMemoryRegion  -- DDR5, DMA-accessible, coherent with CPU
+  | deviceLocal   : XDNAMemoryRegion  -- NPU SRAM, lowest latency, non-coherent
+  | sharedBuffer  : XDNAMemoryRegion  -- L2 slice, semi-coherent with CPU cache
+
+structure XDNACoherenceState where
+  region      : XDNAMemoryRegion
+  dirtyBits   : BitVector             -- Per-tile dirty tracking
+  ownerTile   : Option TileId         -- Current exclusive owner
+  lastSync    : Timestamp             -- Last coherence point
+
+-- Coherence Protocol State Machine
+inductive XDNACoherenceOp where
+  | acquire   : TileId → XDNACoherenceOp       -- Tile takes ownership
+  | release   : TileId → XDNACoherenceOp       -- Tile releases to shared
+  | flush     : XDNACoherenceOp                -- Force writeback to DDR5
+  | invalidate: XDNACoherenceOp                -- Discard local copies
+```
+
+**Memory Transfer Latency Budget:**
+
+| Transfer Path | Latency | Bandwidth | Use Case |
+|---------------|---------|-----------|----------|
+| DDR5 → NPU SRAM | 2-5 μs | 64 GB/s | Model weights load |
+| NPU SRAM → DDR5 | 1-3 μs | 64 GB/s | Inference results |
+| NPU Tile → Tile | 50-100 ns | 256 GB/s | Intermediate activations |
+| CPU Cache → NPU | 3-8 μs | 32 GB/s | Dynamic inputs |
+
+**Synchronization Primitives:**
+
+```rust
+/// XDNA Memory Synchronization API
+pub trait XDNASynchronization {
+    /// Ensure all NPU writes visible to CPU
+    fn npu_to_cpu_fence(&self) -> Result<(), XDNAError>;
+
+    /// Ensure all CPU writes visible to NPU
+    fn cpu_to_npu_fence(&self) -> Result<(), XDNAError>;
+
+    /// Wait for DMA transfer completion
+    fn wait_dma(&self, transfer_id: DmaHandle) -> Result<(), XDNAError>;
+
+    /// Acquire exclusive tile ownership of buffer
+    fn acquire_buffer(&self, buf: &XDNABuffer, tile: TileId) -> Result<(), XDNAError>;
+
+    /// Release buffer to shared state
+    fn release_buffer(&self, buf: &XDNABuffer) -> Result<(), XDNAError>;
+}
+
+/// Zero-copy buffer sharing between CPU and NPU
+pub struct XDNASharedBuffer {
+    ddr5_addr: PhysAddr,        // Host-pinned physical address
+    npu_handle: NpuBufferHandle, // NPU-side reference
+    size: usize,
+    coherence: XDNACoherenceState,
+}
+```
+
+**Coherence Invariants (Lean 4):**
+
+```lean
+-- Invariant: No concurrent writes to same region
+theorem xdna_no_write_conflict (r : XDNAMemoryRegion) (t1 t2 : TileId) :
+    t1 ≠ t2 →
+    r.ownerTile = some t1 →
+    ¬ canWrite t2 r := by
+  intro h_neq h_owner
+  exact exclusive_ownership_enforced r t1 t2 h_neq h_owner
+
+-- Invariant: Flush before CPU read of NPU-modified data
+theorem xdna_flush_before_read (buf : XDNASharedBuffer) :
+    buf.coherence.dirtyBits.any →
+    cpuRead buf →
+    buf.coherence.lastSync > buf.lastNpuWrite := by
+  intro h_dirty h_read
+  exact fence_ordering_preserved buf h_dirty h_read
+```
+
 ---
 
 ## 15. GPU/NPU DSL Design
@@ -1567,7 +1814,174 @@ schedule matmul with
 | *AMD NPU* | XDNA binary | Inference acceleration |
 | *CPU Fallback* | Native LLVM | Development, compatibility |
 
-### 15.5 MVK Approach
+### 15.5 DSL Grammar Specification
+
+**EBNF Grammar for AETHEROS Compute DSL:**
+
+```ebnf
+(* Top-level constructs *)
+program        = { declaration } ;
+declaration    = kernel_def | schedule_def | type_def | import_stmt ;
+
+(* Kernel definition - pure functional *)
+kernel_def     = "kernel" identifier generics? "(" params ")" "->" type
+                 "=" expr ;
+generics       = "[" identifier { "," identifier } "]" ;
+params         = param { "," param } ;
+param          = identifier ":" type ;
+
+(* Schedule definition - optimization strategy *)
+schedule_def   = "schedule" identifier "with" schedule_body ;
+schedule_body  = { schedule_directive } ;
+schedule_directive =
+                 | "tile" "(" dims ")" "by" "(" sizes ")"
+                 | "parallelize" identifier
+                 | "vectorize" identifier [ "by" integer ]
+                 | "unroll" identifier [ "by" integer ]
+                 | "fuse" "(" identifier "," identifier ")"
+                 | "reorder" "(" identifier { "," identifier } ")"
+                 | "compute_at" identifier "," identifier
+                 | "store_at" identifier "," identifier
+                 | "target" target_spec ;
+dims           = identifier { "," identifier } ;
+sizes          = integer { "," integer } ;
+target_spec    = "CPU" | "GPU" "." gpu_unit | "NPU" "." npu_unit ;
+gpu_unit       = "thread" | "warp" | "workgroup" | "grid" ;
+npu_unit       = "tile" | "core" | "cluster" ;
+
+(* Type system *)
+type           = base_type | tensor_type | channel_type | func_type ;
+base_type      = "i8" | "i16" | "i32" | "i64"
+               | "u8" | "u16" | "u32" | "u64"
+               | "f16" | "bf16" | "f32" | "f64"
+               | "bool" ;
+tensor_type    = "Tensor" "[" dim_list "]" [ "<" base_type ">" ] ;
+dim_list       = dim_expr { "," dim_expr } ;
+dim_expr       = identifier | integer | "_" ;
+channel_type   = "Channel" "<" type ">" ;
+func_type      = "(" [ type { "," type } ] ")" "->" type ;
+
+(* Expressions *)
+expr           = let_expr | if_expr | match_expr | lambda_expr
+               | binary_expr | unary_expr | call_expr | index_expr
+               | tensor_expr | literal | identifier ;
+let_expr       = "let" identifier [ ":" type ] "=" expr "in" expr ;
+if_expr        = "if" expr "then" expr "else" expr ;
+tensor_expr    = "Tensor.generate" "(" dims ")" lambda_expr
+               | "Tensor.reduce" reduction_op tensor_expr
+               | "Tensor.map" lambda_expr tensor_expr ;
+reduction_op   = "sum" | "prod" | "max" | "min" | "mean" ;
+lambda_expr    = "fun" "(" params ")" "=>" expr ;
+binary_expr    = expr binary_op expr ;
+binary_op      = "+" | "-" | "*" | "/" | "%" | "&&" | "||"
+               | "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+index_expr     = expr "[" expr { "," expr } "]" ;
+
+(* Literals *)
+literal        = integer | float | bool_lit | string ;
+integer        = digit { digit } ;
+float          = digit { digit } "." digit { digit } [ exponent ] ;
+exponent       = ("e" | "E") [ "+" | "-" ] digit { digit } ;
+bool_lit       = "true" | "false" ;
+```
+
+### 15.6 Compiler Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        AETHEROS DSL COMPILER                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+│  │   FRONTEND   │    │   MIDDLE-END │    │   BACKEND    │                   │
+│  │              │    │              │    │              │                   │
+│  │ ┌──────────┐ │    │ ┌──────────┐ │    │ ┌──────────┐ │                   │
+│  │ │  Lexer   │ │    │ │   Type   │ │    │ │  Target  │ │                   │
+│  │ │          │─┼────┼─│ Checker  │─┼────┼─│ Lowering │ │                   │
+│  │ └──────────┘ │    │ └──────────┘ │    │ └──────────┘ │                   │
+│  │      │       │    │      │       │    │      │       │                   │
+│  │      ▼       │    │      ▼       │    │      ▼       │                   │
+│  │ ┌──────────┐ │    │ ┌──────────┐ │    │ ┌──────────┐ │                   │
+│  │ │  Parser  │ │    │ │ Schedule │ │    │ │   Code   │ │                   │
+│  │ │          │─┼────┼─│  Fusion  │─┼────┼─│   Gen    │ │                   │
+│  │ └──────────┘ │    │ └──────────┘ │    │ └──────────┘ │                   │
+│  │      │       │    │      │       │    │      │       │                   │
+│  │      ▼       │    │      ▼       │    │      ▼       │                   │
+│  │ ┌──────────┐ │    │ ┌──────────┐ │    │ ┌──────────┐ │                   │
+│  │ │   AST    │ │    │ │  Loop    │ │    │ │  Binary  │ │                   │
+│  │ │ Builder  │ │    │ │Transform │ │    │ │ Emission │ │                   │
+│  │ └──────────┘ │    │ └──────────┘ │    │ └──────────┘ │                   │
+│  └──────────────┘    └──────────────┘    └──────────────┘                   │
+│         │                   │                   │                            │
+│         ▼                   ▼                   ▼                            │
+│  ┌────────────┐      ┌────────────┐      ┌────────────────────────┐         │
+│  │  Typed AST │      │ Scheduled  │      │       Targets          │         │
+│  │            │      │    IR      │      │                        │         │
+│  │ • Kernels  │      │            │      │  ┌──────┐ ┌──────┐    │         │
+│  │ • Schedules│      │ • Tiles    │      │  │SPIR-V│ │ RDNA │    │         │
+│  │ • Types    │      │ • Loops    │      │  │      │ │ ISA  │    │         │
+│  │ • Deps     │      │ • Buffers  │      │  └──────┘ └──────┘    │         │
+│  └────────────┘      │ • Syncs    │      │  ┌──────┐ ┌──────┐    │         │
+│                      └────────────┘      │  │ XDNA │ │ LLVM │    │         │
+│                                          │  │Binary│ │  IR  │    │         │
+│                                          │  └──────┘ └──────┘    │         │
+│                                          └────────────────────────┘         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Compiler Phases:**
+
+| Phase | Input | Output | Key Transformations |
+|-------|-------|--------|---------------------|
+| **1. Lexing** | Source text | Token stream | Tokenize, strip comments |
+| **2. Parsing** | Tokens | Untyped AST | Build syntax tree, report errors |
+| **3. Type Checking** | Untyped AST | Typed AST | Infer types, verify constraints |
+| **4. Schedule Binding** | Typed AST + Schedules | Scheduled IR | Apply tiling, parallelism |
+| **5. Loop Transformation** | Scheduled IR | Optimized IR | Fusion, unrolling, vectorization |
+| **6. Buffer Allocation** | Optimized IR | Memory-mapped IR | Allocate scratch, plan transfers |
+| **7. Synchronization** | Memory-mapped IR | Synchronized IR | Insert fences, barriers |
+| **8. Target Lowering** | Synchronized IR | Target IR | Platform-specific intrinsics |
+| **9. Code Generation** | Target IR | Binary | Emit SPIR-V/ISA/XDNA binary |
+
+**Intermediate Representation:**
+
+```rust
+/// Scheduled IR node
+pub enum ScheduledNode {
+    /// Parallel loop nest
+    ParallelFor {
+        indices: Vec<LoopIndex>,
+        body: Box<ScheduledNode>,
+        target: ComputeTarget,
+    },
+    /// Sequential loop
+    SeqFor {
+        index: LoopIndex,
+        body: Box<ScheduledNode>,
+    },
+    /// Tiled computation
+    Tile {
+        outer: Vec<LoopIndex>,
+        inner: Vec<LoopIndex>,
+        tile_sizes: Vec<usize>,
+        body: Box<ScheduledNode>,
+    },
+    /// Memory operation
+    MemOp {
+        kind: MemOpKind,  // Load, Store, Alloc, Free
+        buffer: BufferId,
+        indices: Vec<Expr>,
+    },
+    /// Synchronization barrier
+    Barrier { scope: BarrierScope },
+    /// Fence for memory ordering
+    Fence { ordering: MemoryOrdering },
+    /// Compute expression
+    Compute { expr: TypedExpr },
+}
+```
+
+### 15.7 MVK Approach
 
 **Deferred to post-MVK.** For MVK:
 1. Use HIP/ROCm directly
@@ -1864,11 +2278,140 @@ AETHEROS provides a thin POSIX shim for application portability:
 
 ### 21.2 Not Supported
 
-| Function | Reason |
-|----------|--------|
-| `fork()` | Capability model incompatible with COW semantics |
-| `setuid()` | Ambient authority; capabilities instead |
-| `signals` | Exception channels instead |
+| Function | Reason | AETHEROS Alternative |
+|----------|--------|---------------------|
+| `fork()` | Capability model incompatible with COW semantics | `domain_spawn()` with explicit capability transfer |
+| `setuid()` | Ambient authority; capabilities instead | Capability derivation with restricted rights |
+| `signals` | Ambient delivery; exception channels instead | Typed exception channels (see §21.3) |
+| `ioctl()` | Type-unsafe device control | Typed device channels with session types |
+| `shmget()` | Global namespace | Named capability grants |
+
+### 21.3 POSIX Signal → Capability Event Mapping
+
+**Design Principle:** POSIX signals are ambient (delivered to any thread) and untyped (just an integer). AETHEROS replaces them with typed, capability-protected exception channels that preserve the security model.
+
+#### 21.3.1 Complete Signal Mapping Table
+
+| POSIX Signal | Number | AETHEROS Event Type | Delivery Mechanism | Notes |
+|--------------|--------|---------------------|-------------------|-------|
+| **Termination Signals** |
+| `SIGTERM` | 15 | `TerminationRequest { graceful: true }` | Exception channel | Actor may delay up to 5s |
+| `SIGKILL` | 9 | `TerminationRequest { graceful: false }` | Immediate (Governance) | Cannot be blocked; capability revoked |
+| `SIGINT` | 2 | `InterruptRequest { source: Terminal }` | Exception channel | User-initiated; can be caught |
+| `SIGQUIT` | 3 | `TerminationRequest { core_dump: true }` | Exception channel | Generates diagnostic snapshot |
+| `SIGHUP` | 1 | `SessionDisconnect { terminal: TermId }` | Exception channel | Controlling terminal gone |
+| **Fault Signals** |
+| `SIGSEGV` | 11 | `MemoryFault { addr, access, domain }` | Trap handler | Physical kernel intercepts first |
+| `SIGBUS` | 7 | `BusError { addr, alignment }` | Trap handler | Hardware alignment/access fault |
+| `SIGFPE` | 8 | `ArithmeticException { op, operands }` | Trap handler | FP exceptions if unmasked |
+| `SIGILL` | 4 | `IllegalInstruction { addr, opcode }` | Trap handler | Invalid instruction decode |
+| `SIGTRAP` | 5 | `DebugTrap { addr, reason }` | Debug channel | Breakpoint/single-step |
+| `SIGSYS` | 31 | `InvalidSyscall { number }` | Trap handler | Syscall number out of range |
+| **Job Control Signals** |
+| `SIGSTOP` | 19 | `SuspendRequest { mandatory: true }` | Governance directive | Cannot be blocked |
+| `SIGTSTP` | 20 | `SuspendRequest { mandatory: false }` | Exception channel | User-initiated (Ctrl+Z) |
+| `SIGCONT` | 18 | `ResumeNotification` | Domain activation | Resume from suspended state |
+| `SIGTTIN` | 21 | `BackgroundIOBlocked { direction: Read }` | Exception channel | Background read from tty |
+| `SIGTTOU` | 22 | `BackgroundIOBlocked { direction: Write }` | Exception channel | Background write to tty |
+| **Timer Signals** |
+| `SIGALRM` | 14 | `TimerExpired { timer_id, overrun }` | Timer channel | Physical kernel timer service |
+| `SIGVTALRM` | 26 | `VirtualTimerExpired { timer_id }` | Timer channel | Virtual (user CPU) time |
+| `SIGPROF` | 27 | `ProfileTimerExpired { timer_id }` | Timer channel | Profiling timer |
+| **I/O Signals** |
+| `SIGPIPE` | 13 | `ChannelClosed { channel_id }` | Exception channel | Write to closed channel |
+| `SIGURG` | 23 | `UrgentData { channel_id }` | Data channel (priority) | Out-of-band data arrived |
+| `SIGIO` / `SIGPOLL` | 29 | `IOReady { channel_id, events }` | Notification channel | Async I/O completion |
+| **Child Signals** |
+| `SIGCHLD` | 17 | `DomainStateChange { domain, state }` | Governance notification | Child domain exited/stopped |
+| **User-Defined Signals** |
+| `SIGUSR1` | 10 | `UserEvent { code: 1, payload }` | User channel | Application-defined |
+| `SIGUSR2` | 12 | `UserEvent { code: 2, payload }` | User channel | Application-defined |
+| **System Signals** |
+| `SIGXCPU` | 24 | `QuotaExceeded { resource: CpuTime }` | Governance notification | CPU time quota exceeded |
+| `SIGXFSZ` | 25 | `QuotaExceeded { resource: FileSize }` | Governance notification | File size limit exceeded |
+| `SIGWINCH` | 28 | `TerminalResize { rows, cols }` | Terminal channel | Window size changed |
+| `SIGPWR` | 30 | `PowerEvent { state }` | Physical notification | Power failure/restore |
+
+#### 21.3.2 Exception Channel Protocol
+
+```lean
+-- Session type for exception handling channel
+inductive ExceptionProtocol where
+  | ready    : ExceptionProtocol
+  | handling : ExceptionEvent → ExceptionProtocol
+  | respond  : ExceptionResponse → ExceptionProtocol
+  | closed   : ExceptionProtocol
+
+-- Type-safe exception event
+structure ExceptionEvent where
+  eventType   : ExceptionType          -- Typed event (not integer!)
+  timestamp   : Timestamp
+  context     : ExceptionContext       -- Registers, stack pointer, etc.
+  recoverable : Bool                   -- Can actor continue?
+
+-- Exception handler registration (replaces sigaction)
+structure ExceptionHandler where
+  eventMask     : Set ExceptionType    -- Which events to handle
+  handlerCap    : Capability Channel   -- Channel to receive events
+  flags         : HandlerFlags         -- oneshot, resethand, etc.
+  defaultAction : DefaultAction        -- If handler doesn't respond
+```
+
+#### 21.3.3 Signal Emulation Layer
+
+For POSIX compatibility, a userspace shim translates signals:
+
+```rust
+/// POSIX signal compatibility shim
+pub struct SignalEmulator {
+    /// Exception channel from kernel
+    exception_channel: Channel<ExceptionEvent>,
+    /// Registered signal handlers (sigaction)
+    handlers: [Option<SignalHandler>; 32],
+    /// Blocked signal mask (sigprocmask)
+    blocked_mask: SignalSet,
+    /// Pending signals queue
+    pending: SignalQueue,
+}
+
+impl SignalEmulator {
+    /// Convert AETHEROS exception to POSIX signal
+    fn exception_to_signal(event: &ExceptionEvent) -> Option<Signal> {
+        match &event.eventType {
+            ExceptionType::TerminationRequest { graceful: true } => Some(Signal::SIGTERM),
+            ExceptionType::TerminationRequest { graceful: false } => Some(Signal::SIGKILL),
+            ExceptionType::MemoryFault { .. } => Some(Signal::SIGSEGV),
+            ExceptionType::ChannelClosed { .. } => Some(Signal::SIGPIPE),
+            ExceptionType::TimerExpired { .. } => Some(Signal::SIGALRM),
+            ExceptionType::DomainStateChange { .. } => Some(Signal::SIGCHLD),
+            ExceptionType::InterruptRequest { .. } => Some(Signal::SIGINT),
+            _ => None  // No direct mapping
+        }
+    }
+
+    /// sigaction(2) emulation
+    pub fn register_handler(&mut self, sig: Signal, action: SignalAction) -> Result<(), Errno> {
+        if sig == Signal::SIGKILL || sig == Signal::SIGSTOP {
+            return Err(Errno::EINVAL);  // Cannot catch SIGKILL/SIGSTOP
+        }
+        self.handlers[sig as usize] = Some(action.into());
+        Ok(())
+    }
+}
+```
+
+#### 21.3.4 Key Differences from POSIX Signals
+
+| Aspect | POSIX Signals | AETHEROS Exceptions |
+|--------|--------------|---------------------|
+| **Delivery** | Ambient (any thread) | Capability-protected channel |
+| **Typing** | Integer only | Rich typed events |
+| **Blocking** | Signal mask bitmap | Channel flow control |
+| **Ordering** | Unreliable | FIFO guaranteed |
+| **Context** | Limited (siginfo_t) | Full exception context |
+| **Recovery** | setjmp/longjmp | Structured handler return |
+| **Nesting** | Complex (SA_NODEFER) | Explicit via channel protocol |
+| **Security** | None (root can signal any) | Capability required |
 
 ---
 
@@ -1899,6 +2442,159 @@ AETHEROS provides a thin POSIX shim for application portability:
 | PCIe | 5.0 (128 lanes) |
 | TDP | 350W (configurable) |
 
+### B.1 Benchmark Measurement Methodology
+
+**Measurement Philosophy:** All performance claims require reproducible evidence with statistical rigor. No optimistic single-run measurements.
+
+#### B.1.1 Measurement Harness Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    AETHEROS BENCHMARK HARNESS                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────┐    ┌────────────────┐    ┌────────────────┐            │
+│  │  ENVIRONMENT   │    │  MEASUREMENT   │    │   ANALYSIS     │            │
+│  │   CONTROL      │    │    ENGINE      │    │    ENGINE      │            │
+│  │                │    │                │    │                │            │
+│  │ • CPU isolation│    │ • rdtsc/rdtscp│    │ • Outlier det. │            │
+│  │ • IRQ pinning  │    │ • perf_event  │    │ • CI compute   │            │
+│  │ • Freq locking │    │ • Custom PMC  │    │ • Regression   │            │
+│  │ • Thermal wait │    │ • Memory BW   │    │ • Distribution │            │
+│  └────────────────┘    └────────────────┘    └────────────────┘            │
+│          │                    │                    │                        │
+│          ▼                    ▼                    ▼                        │
+│  ┌─────────────────────────────────────────────────────────────┐           │
+│  │                      RESULT STORE                            │           │
+│  │  • JSON/Parquet output      • Git-versioned baselines       │           │
+│  │  • Full distribution data   • Hardware fingerprint          │           │
+│  └─────────────────────────────────────────────────────────────┘           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### B.1.2 Statistical Requirements
+
+| Metric | Requirement | Rationale |
+|--------|-------------|-----------|
+| **Minimum Samples** | n ≥ 30 | Central Limit Theorem applicability |
+| **Warm-up Runs** | 5 discarded | Cache/branch predictor priming |
+| **Confidence Interval** | 95% CI reported | Statistical uncertainty bounds |
+| **Outlier Detection** | IQR method (1.5×IQR) | Robust to non-normal distributions |
+| **Effect Size** | Cohen's d ≥ 0.5 for significance | Practical significance, not just p-value |
+
+#### B.1.3 Environment Control Protocol
+
+```rust
+/// Pre-benchmark environment validation
+pub struct BenchmarkEnvironment {
+    /// CPU frequency must be stable (within 0.5%)
+    cpu_freq_stability: FrequencyStability,
+    /// Thermal throttling must not occur
+    thermal_headroom: TemperatureMargin,
+    /// Background load < 1% on benchmark cores
+    isolation_verified: bool,
+    /// System uptime > 10 minutes (caches warm)
+    system_stable: bool,
+}
+
+impl BenchmarkEnvironment {
+    pub fn validate(&self) -> Result<(), BenchmarkError> {
+        if self.cpu_freq_stability.variance_pct() > 0.5 {
+            return Err(BenchmarkError::FrequencyUnstable);
+        }
+        if self.thermal_headroom.celsius_margin() < 10 {
+            return Err(BenchmarkError::ThermalRisk);
+        }
+        if !self.isolation_verified {
+            return Err(BenchmarkError::CoreContention);
+        }
+        Ok(())
+    }
+}
+```
+
+#### B.1.4 Timing Primitives
+
+| Primitive | Resolution | Use Case | Overhead |
+|-----------|------------|----------|----------|
+| `rdtsc` | ~1 cycle | Microbenchmarks (<1μs) | 10-20 cycles |
+| `rdtscp` | ~1 cycle + serialization | Cross-core timing | 30-40 cycles |
+| `clock_gettime(MONOTONIC)` | ~20ns | General timing | 50-100ns |
+| `perf_event` counters | 1 event | PMC-based metrics | Variable |
+
+```rust
+/// High-precision timing with serialization
+#[inline(always)]
+pub fn precise_timestamp() -> u64 {
+    let mut aux: u32 = 0;
+    unsafe {
+        core::arch::x86_64::__rdtscp(&mut aux)
+    }
+}
+
+/// Benchmark measurement with proper fencing
+pub fn measure<F: FnOnce()>(f: F) -> u64 {
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    let start = precise_timestamp();
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+
+    f();
+
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    let end = precise_timestamp();
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+
+    end - start
+}
+```
+
+#### B.1.5 Standard Benchmark Suite
+
+| Benchmark | Measures | Target | Method |
+|-----------|----------|--------|--------|
+| **IPC Latency** | Empty message round-trip | <500ns | 10,000 iterations, median |
+| **Capability Create** | Capability creation time | <100ns | 10,000 iterations, p99 |
+| **Context Switch** | Full context switch | <1μs | 1,000 iterations, median |
+| **Page Fault** | Demand paging latency | <10μs | 1,000 iterations, p95 |
+| **Syscall Overhead** | Null syscall cost | <50ns | 100,000 iterations, median |
+| **GPU Dispatch** | Kernel launch latency | <5μs | 1,000 iterations, p95 |
+
+#### B.1.6 Reporting Standard
+
+All benchmark reports MUST include:
+
+```json
+{
+  "benchmark_name": "ipc_latency",
+  "version": "1.0.0",
+  "timestamp": "2025-12-26T12:00:00Z",
+  "environment": {
+    "cpu_model": "AMD Threadripper PRO 9995WX",
+    "cpu_freq_mhz": 4500,
+    "kernel_version": "aetheros-0.1.0",
+    "compiler": "rustc 1.75.0"
+  },
+  "parameters": {
+    "iterations": 10000,
+    "warmup": 5,
+    "message_size_bytes": 64
+  },
+  "results": {
+    "samples": 10000,
+    "mean_ns": 423.5,
+    "median_ns": 412.0,
+    "std_dev_ns": 45.2,
+    "p50_ns": 412.0,
+    "p95_ns": 498.0,
+    "p99_ns": 567.0,
+    "min_ns": 389.0,
+    "max_ns": 1234.0,
+    "outliers_removed": 12,
+    "ci_95_lower_ns": 419.2,
+    "ci_95_upper_ns": 427.8
+  }
+}
+
 ## Appendix C: Document History
 
 | Version | Date | Author | Changes |
@@ -1906,6 +2602,7 @@ AETHEROS provides a thin POSIX shim for application portability:
 | 1.0.0 | 2025-01-01 | Architect | Initial specification |
 | 1.0.0-S | 2025-01-15 | Architect | S-Tier enhanced version |
 | 2.0.0 | 2025-12-26 | Consolidation | MA-compliant unified specification |
+| 2.1.0-S | 2025-12-26 | Grandmaster | S-Tier elevation: NPU coherence model (§14.4), DSL grammar/compiler (§15.5-15.6), benchmark methodology (B.1), kernel failure modes (§7.5), POSIX signal mapping (§21.3) |
 
 ---
 
